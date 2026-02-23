@@ -116,7 +116,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
 
         self.btn_create_new_template.clicked.connect(lambda: self.create_new_tmepalte("dry"))
         self.btn_create_new_template_transfer.clicked.connect(lambda: self.create_new_tmepalte("transfer"))
-        # self.pushButton_tempaltematch.clicked.connect(self.dry_template_validity_test)
+        self.pushButton_tempaltematch.clicked.connect(self.dry_template_validity_test)
         # self.pushButton_transfer_template_match.clicked.connect(self.transfer_template_validity_test)
         self.pushButton_current_image_select_dry.clicked.connect(lambda: self.load_current_image("dry"))
         self.pushButton_current_image_select_transfer.clicked.connect(lambda: self.load_current_image("transfer"))
@@ -575,7 +575,8 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.current_image[station] = image
         self._update_label_from_image(getattr(self,f"label_current_cam_live_{station}"),image)
             
-
+    def template_validity_test(self,station):
+        pass
 
 
 
