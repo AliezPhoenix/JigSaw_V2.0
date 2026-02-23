@@ -3,7 +3,7 @@ from src.threads.thread_imports import *
 
 
 class SuckerThread2(QThread):
-    _update_image_signal = pyqtSignal(np.ndarray)
+    _update_image_signal = pyqtSignal(np.ndarray,Bga_Strip)
     _update_statistics_signal = pyqtSignal(dict)  # 统计更新信号
     _update_message_signal = pyqtSignal(str)
 
@@ -18,7 +18,6 @@ class SuckerThread2(QThread):
         self.shift_detector = ShiftDetector()
         self.mark_detector = MarkDetector()  # 标记检测器
         self.template_detector = TemplateDetector()  # 模板检测器
-        self.bga_strip = Bga_Strip(strip_side="", strip_lot="", strip_sn="", strip_create_time="", params=params)
         self.update_params(params)
         
         # 图像异步保存

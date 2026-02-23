@@ -111,10 +111,10 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.pushButton_confirm_params_dry.clicked.connect(lambda: self.confirm_params("dry"))
         self.pushButton_confirm_params_transfer.clicked.connect(lambda: self.confirm_params("transfer"))
 
-        self.PushButton_detect_pramas_set_dry.clicked.connect(lambda:self.show_pramas_set_dialog("dry"))
-        self.PushButton_detect_pramas_set_transfer.clicked.connect(lambda:self.show_pramas_set_dialog("transfer"))
+        self.PushButton_test_tempalte.clicked.connect(lambda:self.show_pramas_set_dialog("dry"))
+        self.PushButton_transfer_test_template.clicked.connect(lambda:self.show_pramas_set_dialog("transfer"))
 
-        self.btn_create_new_template_dry.clicked.connect(lambda: self.create_new_tmepalte("dry"))
+        self.btn_create_new_template.clicked.connect(lambda: self.create_new_tmepalte("dry"))
         self.btn_create_new_template_transfer.clicked.connect(lambda: self.create_new_tmepalte("transfer"))
         # self.pushButton_tempaltematch.clicked.connect(self.dry_template_validity_test)
         # self.pushButton_transfer_template_match.clicked.connect(self.transfer_template_validity_test)

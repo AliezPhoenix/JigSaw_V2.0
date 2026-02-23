@@ -2,7 +2,7 @@
 from src.threads.thread_imports import *
     
 class DryThread(QThread):
-    _update_image_signal = pyqtSignal(np.ndarray)
+    _update_image_signal = pyqtSignal(np.ndarray,Bga_Strip)
     _update_statistics_signal = pyqtSignal(dict)  # 统计更新信号
     _update_message_signal = pyqtSignal(str)
 
@@ -35,52 +35,54 @@ class DryThread(QThread):
     #——————————————————————————————参数更新函数————————————————————————————————————————————————————————————————————
     def update_params(self,params:dict):
         self.params = params
+        print(params)
         self.size_detect_params = {
-            "min_threshold": self.params["min_threshold_size"],
-            "max_threshold": self.params["max_threshold_size"],
-            "allow_tolerance_x": self.params["product_size_tolerance_x"],
-            "allow_tolerance_y": self.params["product_size_tolerance_y"],
+            "min_threshold": self.params.get("min_threshold_size", 0),
+            "max_threshold": self.params.get("max_threshold_size", 255),
+            "allow_tolerance_x": self.params.get("product_size_tolerance_x", 0.1),
+            "allow_tolerance_y": self.params.get("product_size_tolerance_y", 0.1),
             "roi_width": 80,
-            "std_size": self.params["product_size"],
-            "pixel_size": self.params["pixel_size"],
+            "std_size": self.params.get("product_size", [10.0, 15.0]),
+            "pixel_size": self.params.get("pixel_size", 0.008823),
         }
         self.ball_detect_params = {
-            "min_threshold": self.params["min_threshold_ball"],
-            "max_threshold": self.params["max_threshold_ball"],
-            "ball_area_max_threshold": self.params["ball_area_max_threshold"],
-            "ball_area_min_threshold": self.params["ball_area_min_threshold"],
-            "ball_radius_tolerance": self.params["ball_radius_tolerance"],
-            "std_radius": self.params["std_radius"],
-            "ball_search_roi": self.params["ball_search_roi"]   
+            "min_threshold": self.params.get("min_threshold_ball", 0),
+            "max_threshold": self.params.get("max_threshold_ball", 255),
+            "ball_area_max_threshold": self.params.get("ball_area_max_threshold", 1500),
+            "ball_area_min_threshold": self.params.get("ball_area_min_threshold", 500),
+            "ball_radius_tolerance": self.params.get("ball_radius_tolerance", 0.05),
+            "std_radius": self.params.get("std_radius", 0.17),
+            "expected_ball_count": self.params.get("ball_count", 0),
+            "ball_search_roi": self.params.get("ball_search_roi", [])   
         }
 
         self.shift_detect_params = {
-            "pixel_size": self.params["pixel_size"],
+            "pixel_size": self.params.get("pixel_size", 0.008823),
             "error_correction_factor": 0.7,
-            "allow_tolerance_x": self.params["shift_x_tolerance"],
-            "allow_tolerance_y": self.params["shift_y_tolerance"],
+            "allow_tolerance_x": self.params.get("shift_x_tolerance", 0.05),
+            "allow_tolerance_y": self.params.get("shift_y_tolerance", 0.05),
         }
 
         self.mark_detect_params = {
-            "min_threshold": self.params["min_threshold_mark"],
-            "max_threshold": self.params["max_threshold_mark"],
-            "min_mark_area": self.params["min_mark_area"],
+            "min_threshold": self.params.get("min_threshold_mark", 0),
+            "max_threshold": self.params.get("max_threshold_mark", 255),
+            "min_mark_area": self.params.get("min_mark_area", 2000),
             "auto_threshold_factor": 1.05,
-            "pixel_size": self.params["pixel_size"],
-            "mark_detect_mode": "manual",
-            "mark_roi": self.params["mark_roi"]
+            "pixel_size": self.params.get("pixel_size", 0.008823),
+            "mark_detect_mode": self.params.get("mark_detect_mode", "manual"),
+            "mark_roi": self.params.get("mark_roi", [])
         }
 
         self.template_detect_params = {
-            "template_threshold": self.params["template_threshold"],
-            "search_roi": self.params["search_roi"]
+            "template_threshold": self.params.get("template_threshold", 0.7),
+            "search_roi": self.params.get("search_roi", [])
         }
 
         self.scratch_detect_params = {
             "min_threshold": self.params.get("min_threshold_scratch", 0),
             "max_threshold": self.params.get("max_threshold_scratch", 255),
             "scratch_length_threshold": self.params.get("scratch_length", 5.0),
-            "pixel_size": self.params["pixel_size"],
+            "pixel_size": self.params.get("pixel_size", 0.008823),
             "scratch_roi": self.params.get("scratch_roi", []),
             "roi_blocks": self.params.get("roi_block", [])
         }
@@ -223,6 +225,7 @@ class DryThread(QThread):
     def run(self):
         trigger_camera_last = 0
         trigger_finished_last = 0
+        debug = False
         while True:
             # 检查暂停状态
             if self.is_paused:
@@ -230,8 +233,8 @@ class DryThread(QThread):
                 continue
                 
             #——————————————————读取ModBus数据————————————————————————————————————
-            discrete_input_list = self.MM.read("dry_modbus",address=0,count=4,function_code=cst.READ_DISCRETE_INPUTS)
-            input_register_list = self.MM.read("dry_modbus",address=2,count=3,function_code=cst.READ_INPUT_REGISTERS)
+            _,discrete_input_list = self.MM.read("dry_modbus",address=0,count=4,function_code=cst.READ_DISCRETE_INPUTS)
+            _,input_register_list = self.MM.read("dry_modbus",address=2,count=3,function_code=cst.READ_INPUT_REGISTERS)
             
             # 边界检查：ModBus数据完整性
             if not self._check_modbus_data(discrete_input_list, input_register_list):
@@ -239,15 +242,16 @@ class DryThread(QThread):
                 time.sleep(0.01)
                 continue
             
-            lot = hex_to_string(self.MM.read("dry_modbus",address=16,count=10,function_code=cst.READ_INPUT_REGISTERS))
-            sn =hex_to_string(self.MM.read("dry_modbus",address=26,count=10,function_code=cst.READ_INPUT_REGISTERS))
-            trigger_camera ,trigger_front ,trigger_back,trigger_finished = discrete_input_list
-            mode,trigger_count,trigger_finished = input_register_list
+            trigger_camera, trigger_front, trigger_back, trigger_finished = discrete_input_list
+            mode, trigger_count, sector_change_flag = input_register_list
 
                         
 
             #——————————————————————根具正反初始化bga_strip对象————————————————————————————————————
             if trigger_count  == 1:
+                lot = hex_to_string(self.MM.read("dry_modbus",address=16,count=10,function_code=cst.READ_INPUT_REGISTERS)[1])
+                sn =hex_to_string(self.MM.read("dry_modbus",address=26,count=10,function_code=cst.READ_INPUT_REGISTERS)[1])
+            
                 self.bga_strip = Bga_Strip(
                     strip_side= "front" if trigger_front == 1 else "back",
                     strip_lot=lot,
@@ -262,10 +266,10 @@ class DryThread(QThread):
                 #——————————————————图像采集——————————————————————————————
                 ret,msg,image = self.HM.capture_image("dry_cam")
                 image = cv.rotate(image,cv.ROTATE_90_CLOCKWISE) ####干燥台相机旋转90度
-                if not ret:
+                if not ret or debug:
                     self._update_message_signal.emit(f"采集图像失败: {msg}")
                     time.sleep(0.01)
-                    continue
+                    image = cv.imread("D:\DATA\JigSaw_v2.0\Image\dry\image_1768810267.8009937.bmp",0)
                 image_result = cv.cvtColor(image.copy(),cv.COLOR_GRAY2BGR)
 
                 #——————————————————模板图像加载————————————————————————————————————
@@ -281,12 +285,12 @@ class DryThread(QThread):
                 template_width = template.shape[1]
 
                 #————————————————————检测流程————————————————————————————————————
-                template_pos_list = self.template_detector.detect(template,image,self.template_detect_params)
+                template_pos_list = self.template_detector.detect(template,image)
                 current_product_list = []
                 for x,y in template_pos_list:
                     # 边界检查：产品图像提取位置
                     if not self._check_image_bounds(image, x, y, template_width, template_height):
-                        self._update_message_signal.emit(f"警告: 模板位置 ({x}, {y}) 超出图像边界 ({image.shape[1]}, {image.shape[0]})，跳过")
+                        self._update_message_signal.emit(f"警告: 模板位置 ({x}, {y}) 超出图像边界 ({image.shape[1]}, {image.shape[0]})")
                         time.sleep(0.01)
                         continue
                     
@@ -298,18 +302,19 @@ class DryThread(QThread):
                         self._async_save_image(product_info["product_image_result"], filepath_result)
                         self._async_save_image(product_image, filepath_ori)
                     #——————————————————如果是NG产品，异步保存图像（同时保存原图和检测结果图）————————————————————————————————————
-                    if product_info["defect_type"][0] == "NG":
-                        defect_type = product_info["defect_type"][1] if len(product_info["defect_type"]) > 1 else "UNKNOWN"
+                    if "OK" not in product_info["defect_type"]:
+                        defect_type = product_info["defect_type"][0] if len(product_info["defect_type"]) > 1 else "UNKNOWN"
                         filepath_result = self._generate_image_filename(defect_type)
                         filepath_ori = self._generate_image_filename("ORI")
                         self._async_save_image(product_info["product_image_result"], filepath_result)
                         self._async_save_image(product_image, filepath_ori)
                     
-                    
+                   
                     current_product_list.append(product_info)
-
+                    image_result[y:y+template_height,x:x+template_width] = product_info["product_image_result"]
                 #——————————————————更新显示和统计信息——————————————————————————————————————————————————————
-                self.update_display_image(image_result,False)
+
+                self._update_image_signal.emit(image_result,self.bga_strip)
                 self.bga_strip.write(current_product_list,image)
                 stats_info = self.bga_strip.get_statistics_info()
                 if stats_info:
@@ -319,9 +324,14 @@ class DryThread(QThread):
                 if  trigger_finished == 1 and trigger_finished_last == 0:
                     send_data = self.bga_strip.full_value.copy()
                     log_info = self.bga_strip.get_log_info()
-                    self._write_modbus_registers(send_data, mode)
+
+                    success = self._write_modbus_registers(send_data, mode)
+                    print(success)
+                    print(len(send_data))
+                    print(send_data)
                     self.write_log_to_file(log_info)
-                self.MM.write(alias="dry_modbus",address = 0,value_list=[1],function_code=cst.WRITE_SINGLE_COIL)
+                
+                success,msg = self.MM.write(alias="dry_modbus",address = 0,value_list=[1],function_code=cst.WRITE_SINGLE_COIL)
             elif trigger_camera ==0 and trigger_finished == 0:
                 self.MM.write(alias="dry_modbus",address = 0,value_list=[0],function_code=cst.WRITE_SINGLE_COIL)
             else:
@@ -329,7 +339,7 @@ class DryThread(QThread):
                 self.MM.write(alias="dry_modbus",address = 2,value_list=[0],function_code=cst.WRITE_SINGLE_COIL)
             trigger_camera_last = trigger_camera
             trigger_finished_last = trigger_finished
-            
+            print(trigger_camera,trigger_camera_last,trigger_finished,trigger_finished_last)
             #————————————————————————实时显示画面————————————————————
             if self.ui.radioButton_live_dry.isChecked():
                 #——————————————————只有在没有处理触发信号时才更新实时显示，避免重复采集图像————————————————————————————————————
@@ -341,7 +351,7 @@ class DryThread(QThread):
                         continue
                     image_live = cv.rotate(image_live, cv.ROTATE_90_CLOCKWISE)
                     image_live_bgr = cv.cvtColor(image_live.copy(), cv.COLOR_GRAY2BGR)
-                    self.update_display_image(image_live_bgr,True)
+                    self._update_image_signal.emit(image_live_bgr,None)
             else:
                 time.sleep(0.01)
             
@@ -353,109 +363,42 @@ class DryThread(QThread):
     
     #——————————————————————————————检测产品函数————————————————————————————————————————————————————————————————————
     def _detect_product(self,x,y,product_image:np.ndarray):
-        product_info = {
-            "x": x,
-            "y": y,
-            "product_image_result": None,
-            "size_result": None,
-            "ball_result": None,
-            "mark_result": None,
-            "shift_result": None,
-            "scratch_result": None,
-            "defect_type": ["None"],
-        }
-
-        if self.params.get("mark_check_enable", False):
-            mark_detect_result = self.mark_detector.detect(product_image)
-            if not mark_detect_result[0]:
-                # 检测失败，记录错误但继续处理
-                return False,f"Mark检测失败: {mark_detect_result[1]}",product_info
-            else:
-                if not mark_detect_result[2]["is_valid"]:
-                    # 未检测到Mark → OK
-                    product_info["mark_result"] = mark_detect_result
-                else:
-                    # 检测到Mark → NG
-                    product_info["defect_type"].remove("None")
-                    product_info["defect_type"].append("Mark")
-                    product_info["product_image_result"] = self.draw_detection_results(product_image,product_info)
-                    return True,"成功",product_info
-                
-        if self.params.get("size_check_enable", False):
-            size_detect_result = self.size_detector.detect(product_image)
-            if not size_detect_result[0]:
-                # 检测失败，记录错误但继续处理
-                return False,f"Size检测失败: {size_detect_result[1]}",product_info
-            else:
-                if size_detect_result[2]["is_valid"]:
-                    # 尺寸合格 → OK，继续检测
-                    product_info["size_result"] = size_detect_result
-                else:
-                    # 尺寸不合格 → NG
-                    product_info["defect_type"].remove("None")
-                    product_info["defect_type"].append("Size")
-                    product_info["product_image_result"] = self.draw_detection_results(product_image,product_info)
-                    return True,"成功",product_info
-
-        if self.params.get("ball_check_enable", False):
-            ball_detect_result = self.ball_detector.detect(product_image)
-            if not ball_detect_result[0]:
-                # 检测失败，记录错误但继续处理
-                return False,f"Ball检测失败: {ball_detect_result[1]}",product_info
-            else:
-                if ball_detect_result[2]["is_valid"]:
-                    # 球检测合格 → OK，继续检测
-                    product_info["ball_result"] = ball_detect_result
-                else:
-                    # 球检测不合格 → NG
-                    product_info["defect_type"].remove("None")
-                    if ball_detect_result[2]["ball_count"] != self.params.get("ball_count", 0):
-                        product_info["defect_type"].append("Ball Count")
-                    else:
-                        product_info["defect_type"].append("Ball")
-                    product_info["product_image_result"] = self.draw_detection_results(product_image,product_info)
-                    return True,"成功",product_info
-
-        if self.params.get("shift_check_enable", False):
-            # Shift检测需要ball_result和size_result
-            if product_info["ball_result"] is not None and product_info["size_result"] is not None:
-                # shift_detector.detect()期望接收dict参数，从tuple中提取result_dict
-                ball_result_dict = product_info["ball_result"][2]
-                size_result_dict = product_info["size_result"][2]
-                shift_detect_result = self.shift_detector.detect(ball_result_dict, size_result_dict)
-                if not shift_detect_result[0]:
-                    # 检测失败，记录错误但继续处理
-                    return False,f"Shift检测失败: {shift_detect_result[1]}",product_info
-                else:
-                    if shift_detect_result[2]["is_valid"]:
-                        # 偏移合格 → OK，继续检测
-                        product_info["shift_result"] = shift_detect_result   
-                    else:
-                        # 偏移不合格 → NG
-                        product_info["defect_type"].remove("None")
-                        product_info["defect_type"].append("Shift")
-                        product_info["product_image_result"] = self.draw_detection_results(product_image,product_info)
-                        return True,"成功",product_info
-
-        if self.params.get("scratch_check_enable", False):
-            scratch_detect_result = self.scratch_detector.detect(product_image)
-            if not scratch_detect_result[0]:
-                # 检测失败，记录错误但继续处理
-                return False,f"Scratch检测失败: {scratch_detect_result[1]}",product_info
-            else:
-                if scratch_detect_result[2]["is_valid"]:
-                    # 划痕检测合格 → OK，继续检测
-                    product_info["scratch_result"] = scratch_detect_result
-                else:
-                    # 划痕检测不合格 → NG
-                    product_info["defect_type"].remove("None")
-                    product_info["defect_type"].append("Scratch")
-                    product_info["product_image_result"] = self.draw_detection_results(product_image,product_info)
-                    return True,"成功",product_info
-
-        product_info["product_image_result"] = self.draw_detection_results(product_image,product_info)
-        product_info["defect_type"] = "OK" if product_info["defect_type"] == "None" else product_info["defect_type"]
-        return True,"成功",product_info
+        # 准备检测器字典
+        # 调用通用检测函数（提前返回模式）
+        success, msg, product_info = execute_product_detection(
+            image=product_image,
+            detectors={
+            "ball_detector": self.ball_detector,
+            "size_detector": self.size_detector,
+            "mark_detector": self.mark_detector,
+            "shift_detector": self.shift_detector,
+            "scratch_detector": self.scratch_detector,
+                },
+            params={
+            "mark_check_enable": self.params.get("mark_check_enable", True),
+            "size_check_enable": self.params.get("size_check_enable", True),
+            "ball_check_enable": self.params.get("ball_check_enable", True),
+            "shift_check_enable": self.params.get("shift_check_enable", True),
+            "scratch_check_enable": self.params.get("scratch_check_enable", True),
+            "allow_mark": False,
+            },
+            detect_type=None,  # 执行所有启用的检测
+            early_return_on_ng=True,  # 生产模式：检测到NG立即返回
+            error_callback=None  # 不显示对话框，返回错误信息
+        )
+        
+        # 添加位置信息
+        product_info["x"] = x
+        product_info["y"] = y
+        
+        # 如果检测失败，直接返回
+        if not success:
+            return False, msg, product_info
+        
+        # 绘制检测结果
+        product_info["product_image_result"] = self.draw_detection_results(product_image, product_info)
+        
+        return True, "成功", product_info
 
     #——————————————————————————————绘制检测结果函数————————————————————————————————————————————————————————————————————
     def draw_detection_results(self,image_result:np.ndarray,product_info:dict):

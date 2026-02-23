@@ -15,9 +15,9 @@ class TemplateDetector:
         params = self.params
         threshold = params.get("template_threshold", 0.6)
         search_roi = params.get("search_roi", None)
+        x,y,w,h  = search_roi
         self.template = template
-        for x,y,w,h in search_roi:
-            self.image = image[y:y+h,x:x+w]
+        self.image = image[y:y+h,x:x+w]
         match_points = []
         result_list = []
         template_width = self.template.shape[1]
@@ -34,13 +34,12 @@ class TemplateDetector:
 
         result = cv.matchTemplate(self.image, self.template, cv.TM_CCOEFF_NORMED)
         loc = np.where(result >= threshold)
-
         for pt in zip(*loc[::-1]):
             x,y = pt
             confidence = result[y,x]
             match_points.append((x,y,confidence))
 
-        match_points = match_points.sort(key=lambda x: x[2], reverse=True)
+        match_points.sort(key=lambda x: x[2], reverse=True)
         min_distence = min(template_height/2, template_width/2) ### 采取二分之一的模板宽度作为最小距离
   
         for x, y ,confidence in match_points:
@@ -55,6 +54,11 @@ class TemplateDetector:
 
         y_tolerance = template_height/2
         result_list.sort(key=lambda pt: (int(pt[1] / y_tolerance) if y_tolerance > 0 else int(pt[1]), pt[0]))
+
+        # 将坐标转换为原始图像坐标（加上search_roi的偏移量）
+        if search_roi:
+            roi_x, roi_y = search_roi[0], search_roi[1]
+            result_list = [(x + roi_x, y + roi_y) for x, y in result_list]
 
         return result_list
 

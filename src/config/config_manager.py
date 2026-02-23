@@ -25,13 +25,16 @@ class ConfigManager:
         
         # 如果配置文件存在，则加载；不存在则创建空配置
         if os.path.exists(config_file_path):
-            self.load()
+            ret, error_message = self.load(config_file_path)
+            if not ret:
+                print(f"警告: 加载配置文件失败: {error_message}")
+                self.config_dict = {}
         else:
             # 确保目录存在
             os.makedirs(os.path.dirname(config_file_path), exist_ok=True)
             self.config_dict = {}
     
-    def load(self,file_path:str) -> None:
+    def load(self,file_path:str) -> tuple[bool, Optional[str]]:
         """
         从文件加载配置
         
@@ -52,7 +55,7 @@ class ConfigManager:
                 return False,f"Failed to read config file: {file_path}. Error: {str(e)}"
             return True,None
     
-    def save(self, file_path: str) -> None:
+    def save(self, file_path: str) -> tuple[bool, Optional[str]]:
         """
         保存配置到文件
         

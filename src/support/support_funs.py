@@ -95,8 +95,8 @@ class Bga_Strip():
         # 从params中获取尺寸参数
         self.strip_cols = params.get("total_cols", 0)
         self.strip_rows = params.get("total_rows", 0)
-        self.window_rows = params.get("current_rows", 0)
-        self.window_cols = params.get("current_cols", 0)
+        self.window_rows = params.get("current_row", 0)
+        self.window_cols = params.get("current_col", 0)
         
         self.strip_side = strip_side
         self.strip_lot = strip_lot
@@ -490,6 +490,12 @@ class Bga_Strip():
                 shift_x = product.get("shift_x", 0.0)
                 shift_y = product.get("shift_y", 0.0)
                 
+                # 处理 None 值：如果 shift_x/shift_y 为 None，使用默认值 0.0
+                if shift_x is None:
+                    shift_x = 0.0
+                if shift_y is None:
+                    shift_y = 0.0
+                
                 product_list.append({
                     "product_index": product.get("product_index", ""),
                     "width": f"{size[0]:.4f}" if size and size[0] is not None else "",
@@ -504,6 +510,9 @@ class Bga_Strip():
                 })
             
             # 构建返回字典
+            # 计算总产品数：使用实际记录的产品数量
+            total_products = len(accumulated_log_info)
+            
             result = {
                 "lot_id": self.strip_lot,
                 "sn_id": self.strip_sn,
@@ -511,7 +520,7 @@ class Bga_Strip():
                     "start_time": start_time.strftime('%Y-%m-%d %H:%M:%S') if start_time else "",
                     "end_time": end_time.strftime('%Y-%m-%d %H:%M:%S'),
                     "duration_seconds": duration_seconds,
-                    "total_products": self.count,
+                    "total_products": total_products,
                     "ng_total": ng_total_count,
                     "enabled_detections": enabled_detections
                 },
@@ -585,7 +594,7 @@ class Bga_Strip():
             yield_rate = ((total_count - ng_total_count) / total_count * 100) if total_count > 0 else 0.0
             
             return {
-                "station": "干燥台",
+                "station": "干燥台" if self.side == "front" else "移栽台",
                 "lot_id": self.strip_lot if hasattr(self, 'strip_lot') else "",
                 "total_count": total_count,
                 "ng_count": ng_total_count,
@@ -605,7 +614,7 @@ class Bga_Strip():
             import traceback
             traceback.print_exc()
             return {
-                "station": "干燥台",
+                "station": "干燥台" if self.side == "front" else "移栽台",
                 "lot_id": "",
                 "total_count": 0,
                 "ng_count": 0,
@@ -916,7 +925,7 @@ def draw_detection_results(image_result: np.ndarray, product_info: dict,
                 x2 = max(0, min(x2, img_w-1))
                 y2 = max(0, min(y2, img_h-1))
                 cv.rectangle(image_result, (x1, y1), (x2, y2), 
-                            COLOR_GREEN if is_valid else COLOR_RED, 2)
+                            COLOR_GREEN if is_valid else COLOR_RED, 4)
         except Exception as e:
             error_messages.append(f"绘制尺寸结果错误: {e}")
     
@@ -955,7 +964,7 @@ def draw_detection_results(image_result: np.ndarray, product_info: dict,
                     else:
                         x, y, w, h = 0, 0, 0, 0
                     if check_image_bounds(image_result, x, y, w, h):
-                        cv.rectangle(image_result, (x, y), (x+w, y+h), COLOR_RED, 2)
+                        cv.rectangle(image_result, (x, y), (x+w, y+h), COLOR_RED, 3)
                 except Exception as e:
                     error_messages.append(f"绘制NG球结果错误: {e}")
         except Exception as e:
@@ -980,13 +989,13 @@ def draw_detection_results(image_result: np.ndarray, product_info: dict,
                     if isinstance(mark_contour[0], np.ndarray):
                         # 是轮廓列表
                         for contour in mark_contour:
-                            cv.drawContours(image_result, [contour], -1, mark_draw_color, 2)
+                            cv.drawContours(image_result, [contour], -1, mark_draw_color, 3)
                     else:
                         # 可能是单个轮廓
-                        cv.drawContours(image_result, [mark_contour], -1, mark_draw_color, 2)
+                        cv.drawContours(image_result, [mark_contour], -1, mark_draw_color, 3)
                 elif isinstance(mark_contour, np.ndarray):
                     # 单个轮廓
-                    cv.drawContours(image_result, [mark_contour], -1, mark_draw_color, 2)
+                    cv.drawContours(image_result, [mark_contour], -1, mark_draw_color, 3)
         except Exception as e:
             error_messages.append(f"绘制Mark结果错误: {e}")
     
@@ -1024,21 +1033,21 @@ def draw_detection_results(image_result: np.ndarray, product_info: dict,
             ball_center = shift_dict.get("ball_center", None)
             size_center = shift_dict.get("size_center", None)
             
-            # 绘制球中心点（如果存在）
-            if ball_center is not None and len(ball_center) >= 2:
-                ball_x, ball_y = int(ball_center[0]), int(ball_center[1])
-                if 0 <= ball_x < img_w and 0 <= ball_y < img_h:
-                    cv.circle(image_result, (ball_x, ball_y), 5, 
-                            COLOR_GREEN if is_valid_shift else COLOR_RED, -1)
-                    cv.circle(image_result, (ball_x, ball_y), 10, 
-                            COLOR_GREEN if is_valid_shift else COLOR_RED, 2)
+            # # 绘制球中心点（如果存在）
+            # if ball_center is not None and len(ball_center) >= 2:
+            #     ball_x, ball_y = int(ball_center[0]), int(ball_center[1])
+            #     if 0 <= ball_x < img_w and 0 <= ball_y < img_h:
+            #         cv.circle(image_result, (ball_x, ball_y), 5, 
+            #                 COLOR_GREEN if is_valid_shift else COLOR_RED, -1)
+            #         cv.circle(image_result, (ball_x, ball_y), 10, 
+            #                 COLOR_GREEN if is_valid_shift else COLOR_RED, 2)
             
-            # 绘制尺寸中心点（如果存在）
-            if size_center is not None and len(size_center) >= 2:
-                size_x, size_y = int(size_center[0]), int(size_center[1])
-                if 0 <= size_x < img_w and 0 <= size_y < img_h:
-                    cv.circle(image_result, (size_x, size_y), 5, COLOR_BLUE, -1)
-                    cv.circle(image_result, (size_x, size_y), 10, COLOR_BLUE, 2)
+            # # 绘制尺寸中心点（如果存在）
+            # if size_center is not None and len(size_center) >= 2:
+            #     size_x, size_y = int(size_center[0]), int(size_center[1])
+            #     if 0 <= size_x < img_w and 0 <= size_y < img_h:
+            #         cv.circle(image_result, (size_x, size_y), 5, COLOR_BLUE, -1)
+            #         cv.circle(image_result, (size_x, size_y), 10, COLOR_BLUE, 2)
             
             # 绘制偏移向量（从尺寸中心到球中心）
             if (ball_center is not None and size_center is not None and 
@@ -1048,7 +1057,8 @@ def draw_detection_results(image_result: np.ndarray, product_info: dict,
                 if (0 <= ball_x < img_w and 0 <= ball_y < img_h and 
                     0 <= size_x < img_w and 0 <= size_y < img_h):
                     cv.arrowedLine(image_result, (size_x, size_y), (ball_x, ball_y), 
-                                 COLOR_GREEN if is_valid_shift else COLOR_RED, 2, tipLength=0.3)
+                                 COLOR_GREEN if is_valid_shift else COLOR_RED, 3, tipLength=10)
+                    cv.line(image_result, (size_x, size_y), (ball_x, ball_y), COLOR_GREEN if is_valid_shift else COLOR_RED, 3,cv.LINE_8)
         except Exception as e:
             error_messages.append(f"绘制shift结果错误: {e}")
     
@@ -1058,3 +1068,262 @@ def draw_detection_results(image_result: np.ndarray, product_info: dict,
         return True, msg, image_result  # 有警告但图像已绘制，返回成功但带警告信息
     else:
         return True, "", image_result  # 完全成功
+
+
+def execute_product_detection(
+    image: np.ndarray,
+    detectors: dict,
+    params: dict,
+    detect_type: str = None,
+    early_return_on_ng: bool = False,
+    error_callback = None
+) -> tuple:
+    """
+    执行产品检测的通用函数
+    
+    Args:
+        image: 输入的灰度图像或BGR图像
+        detectors: 检测器字典，包含以下键：
+            - "ball_detector": BallDetector实例
+            - "size_detector": SizeDetector实例
+            - "mark_detector": MarkDetector实例
+            - "shift_detector": ShiftDetector实例
+            - "scratch_detector": ScratchDetector实例
+        params: 参数字典，包含以下键：
+            - "mark_check_enable": bool 是否启用Mark检测
+            - "allow_mark": bool 是否允许Mark（默认False）
+                - True: 检测到Mark判定为OK，未检测到Mark判定为NG
+                - False: 检测到Mark判定为NG，未检测到Mark判定为OK（默认行为）
+            - "size_check_enable": bool 是否启用尺寸检测
+            - "ball_check_enable": bool 是否启用锡球检测
+            - "shift_check_enable": bool 是否启用偏移检测
+            - "scratch_check_enable": bool 是否启用划痕检测
+        detect_type: 检测类型，可选值：
+            - None 或 "all": 执行所有启用的检测
+            - "mark": 仅执行Mark检测
+            - "size": 仅执行尺寸检测
+            - "ball": 仅执行锡球检测
+            - "shift": 仅执行偏移检测
+            - "scratch": 仅执行划痕检测
+        early_return_on_ng: bool 是否在检测到NG时提前返回
+        error_callback: 可选的错误回调函数，接收 (error_msg: str) 参数
+    
+    Returns:
+        tuple: (success: bool, msg: str, product_info: dict)
+            - success: bool 是否成功执行（False表示检测失败）
+            - msg: str 消息（错误信息或成功信息）
+            - product_info: dict 产品信息字典，包含以下键：
+                - "defect_type": list 缺陷类型列表，如 ["OK"] 或 ["NG", "Mark"]
+                - "product_image_result": np.ndarray 产品图像结果（原始图像副本）
+                - "size_result": tuple 或 None 尺寸检测结果 (success, msg, result_dict)
+                - "ball_result": tuple 或 None 锡球检测结果 (success, msg, result_dict)
+                - "mark_result": tuple 或 None Mark检测结果 (success, msg, result_dict)
+                - "shift_result": tuple 或 None 偏移检测结果 (success, msg, result_dict)
+                - "scratch_result": tuple 或 None 划痕检测结果 (success, msg, result_dict)
+    """
+    # 确定要执行的检测类型
+    if detect_type is None or detect_type == "all":
+        mark_check_enable = params.get("mark_check_enable", False)
+        size_check_enable = params.get("size_check_enable", False)
+        ball_check_enable = params.get("ball_check_enable", False)
+        shift_check_enable = params.get("shift_check_enable", False)
+        scratch_check_enable = params.get("scratch_check_enable", False)
+    else:
+        mark_check_enable = (detect_type == "mark")
+        size_check_enable = (detect_type == "size")
+        ball_check_enable = (detect_type == "ball")
+        shift_check_enable = (detect_type == "shift")
+        scratch_check_enable = (detect_type == "scratch")
+    
+    # 初始化结果字典
+    product_info = {
+        "defect_type": ["OK"],
+        "product_image_result": None,
+        "size_result": None,
+        "ball_result": None,
+        "mark_result": None,
+        "shift_result": None,
+        "scratch_result": None,
+    }
+    
+    # Mark检测
+    if mark_check_enable:
+        mark_detector = detectors.get("mark_detector")
+        if mark_detector is None:
+            error_msg = "mark_detector 未提供"
+            if error_callback:
+                error_callback(error_msg)
+            return False, error_msg, product_info
+        
+        mark_detect_result = mark_detector.detect(image)
+        if not mark_detect_result[0]:  # 检测失败
+            error_msg = f"Mark检测失败: {mark_detect_result[1]}"
+            if error_callback:
+                error_callback(error_msg)
+            return False, error_msg, product_info
+        
+        product_info["mark_result"] = mark_detect_result
+        
+        # 获取allow_mark参数（默认False，保持向后兼容）
+        allow_mark = params.get("allow_mark", False)
+        is_valid = mark_detect_result[2]["is_valid"]
+        
+        # 根据allow_mark参数决定判定逻辑
+        if allow_mark:
+            # allow_mark == True: 检测到Mark判定为OK，未检测到Mark判定为NG
+            if not is_valid:
+                # 未检测到Mark，判定为NG
+                if "OK" in product_info["defect_type"]:
+                    product_info["defect_type"].remove("OK")
+                product_info["defect_type"].append("Mark")
+                
+                # 如果启用提前返回，检测到NG时立即返回
+                if early_return_on_ng:
+                    product_info["product_image_result"] = image.copy()
+                    return True, "成功", product_info
+            # 检测到Mark，判定为OK，继续后续检测
+        else:
+            # allow_mark == False（默认）: 检测到Mark判定为NG，未检测到Mark判定为OK
+            if is_valid:
+                # 检测到Mark，判定为NG
+                if "OK" in product_info["defect_type"]:
+                    product_info["defect_type"].remove("OK")
+                product_info["defect_type"].append("Mark")
+                
+                # 如果启用提前返回，检测到NG时立即返回
+                if early_return_on_ng:
+                    product_info["product_image_result"] = image.copy()
+                    return True, "成功", product_info
+            # 未检测到Mark，判定为OK，继续后续检测
+    
+    # 尺寸检测
+    if size_check_enable:
+        size_detector = detectors.get("size_detector")
+        if size_detector is None:
+            error_msg = "size_detector 未提供"
+            if error_callback:
+                error_callback(error_msg)
+            return False, error_msg, product_info
+        
+        size_detect_result = size_detector.detect(image)
+        if not size_detect_result[0]:  # 检测失败
+            error_msg = f"Size检测失败: {size_detect_result[1]}"
+            if error_callback:
+                error_callback(error_msg)
+            return False, error_msg, product_info
+        
+        product_info["size_result"] = size_detect_result
+        if not size_detect_result[2]["is_valid"]:
+            # 尺寸不合格，判定为NG
+            if "OK" in product_info["defect_type"]:
+                product_info["defect_type"].remove("OK")
+            product_info["defect_type"].append("Size")
+            
+            # 如果启用提前返回，检测到NG时立即返回
+            if early_return_on_ng:
+                product_info["product_image_result"] = image.copy()
+                return True, "成功", product_info
+    
+    # 锡球检测
+    if ball_check_enable:
+        ball_detector = detectors.get("ball_detector")
+        if ball_detector is None:
+            error_msg = "ball_detector 未提供"
+            if error_callback:
+                error_callback(error_msg)
+            return False, error_msg, product_info
+        
+        ball_detect_result = ball_detector.detect(image)
+        if not ball_detect_result[0]:  # 检测失败
+            error_msg = f"Ball检测失败: {ball_detect_result[1]}"
+            if error_callback:
+                error_callback(error_msg)
+            return False, error_msg, product_info
+        
+        product_info["ball_result"] = ball_detect_result
+        if not ball_detect_result[2]["is_valid"]:
+            # 锡球不合格，判定为NG
+            if "OK" in product_info["defect_type"]:
+                product_info["defect_type"].remove("OK")
+            
+            # 判断是数量问题还是质量问题
+            # 从ball_detector的参数中获取期望数量
+            expected_count = ball_detector.params.get("expected_ball_count", 0)
+            if ball_detect_result[2].get("ball_count", 0) != expected_count:
+                product_info["defect_type"].append("Ball Count")
+            else:
+                product_info["defect_type"].append("Ball")
+            
+            # 如果启用提前返回，检测到NG时立即返回
+            if early_return_on_ng:
+                product_info["product_image_result"] = image.copy()
+                return True, "成功", product_info
+    
+    # 偏移检测（需要ball_result和size_result）
+    if shift_check_enable and product_info["ball_result"] is not None and product_info["size_result"] is not None:
+        shift_detector = detectors.get("shift_detector")
+        if shift_detector is None:
+            error_msg = "shift_detector 未提供"
+            if error_callback:
+                error_callback(error_msg)
+            return False, error_msg, product_info
+        
+        # shift_detector.detect()期望接收dict参数，从tuple中提取result_dict
+        ball_result_dict = product_info["ball_result"][2]
+        size_result_dict = product_info["size_result"][2]
+        shift_detect_result = shift_detector.detect(ball_result_dict, size_result_dict)
+        
+        if not shift_detect_result[0]:  # 检测失败
+            error_msg = f"Shift检测失败: {shift_detect_result[1]}"
+            if error_callback:
+                error_callback(error_msg)
+            return False, error_msg, product_info
+        
+        product_info["shift_result"] = shift_detect_result
+        if not shift_detect_result[2]["is_valid"]:
+            # 偏移不合格，判定为NG
+            if "OK" in product_info["defect_type"]:
+                product_info["defect_type"].remove("OK")
+            product_info["defect_type"].append("Shift")
+            
+            # 如果启用提前返回，检测到NG时立即返回
+            if early_return_on_ng:
+                product_info["product_image_result"] = image.copy()
+                return True, "成功", product_info
+    
+    # 划痕检测
+    if scratch_check_enable:
+        scratch_detector = detectors.get("scratch_detector")
+        if scratch_detector is None:
+            error_msg = "scratch_detector 未提供"
+            if error_callback:
+                error_callback(error_msg)
+            return False, error_msg, product_info
+        
+        scratch_detect_result = scratch_detector.detect(image)
+        if not scratch_detect_result[0]:  # 检测失败
+            error_msg = f"Scratch检测失败: {scratch_detect_result[1]}"
+            if error_callback:
+                error_callback(error_msg)
+            return False, error_msg, product_info
+        
+        product_info["scratch_result"] = scratch_detect_result
+        if not scratch_detect_result[2]["is_valid"]:
+            # 划痕不合格，判定为NG
+            if "OK" in product_info["defect_type"]:
+                product_info["defect_type"].remove("OK")
+            product_info["defect_type"].append("Scratch")
+            
+            # 如果启用提前返回，检测到NG时立即返回
+            if early_return_on_ng:
+                product_info["product_image_result"] = image.copy()
+                return True, "成功", product_info
+    
+    # 更新总体判定
+    if len(product_info["defect_type"]) > 1:
+        product_info["defect_type"][0] = "NG"
+    
+    # 生成产品图像结果（用于显示）
+    product_info["product_image_result"] = image.copy()
+    
+    return True, "成功", product_info
