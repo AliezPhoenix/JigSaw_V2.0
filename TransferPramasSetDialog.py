@@ -1,0 +1,1013 @@
+from PyQt5.QtWidgets import QApplication, QDialog, QPushButton, QFileDialog, QMessageBox
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QPixmap, QImage
+from ui.TransferPramasSetDialog_ui import Ui_TransferPramasSetDialog
+import cv2 as cv
+import numpy as np
+from src.detectors.ball_detector import BallDetector
+from src.detectors.mark_detector import MarkDetector
+from src.detectors.size_detector import SizeDetector
+from src.detectors.shift_detector import ShiftDetector
+from src.detectors.scratch_detector import ScratchDetector
+from src.config.config_manager import ConfigManager
+from src.support.support_funs import selectROI, draw_detection_results
+
+class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
+    def __init__(self, config_manager:'ConfigManager', parent=None):
+        super().__init__(parent)
+        # 设置界面（从 .ui 文件生成的代码）
+        self.setupUi(self)
+        self.is_init = False
+        self.showMaximized()
+
+        self.ball_detector = BallDetector()
+        self.size_detector = SizeDetector()
+        self.shift_detector = ShiftDetector()
+        self.mark_detector = MarkDetector()
+        self.scratch_detector = ScratchDetector()
+        self.config_manager = config_manager
+        self.local_params = self.config_manager.get_section("work_transfer_params")
+        
+        # 存储原始图像
+        self.template_image = None  # 模板图像（用于显示，可能包含屏蔽效果，用于检测）
+        self.processed_image = None  # 处理后的图像
+
+        # 设置 SpinBox 范围
+        self.spin_thresh_lower_ball.setMinimum(0)
+        self.spin_thresh_upper_ball.setMinimum(0)
+        self.spin_thresh_lower_size.setMinimum(0)
+        self.spin_thresh_upper_size.setMinimum(0)
+        self.spin_area_min.setMinimum(0)
+        self.spin_area_max.setMinimum(0)
+        # Mark检测的 SpinBox
+        self.spinBox_threshold_min_mark_transfer.setMinimum(0)
+        self.spinBox_threshold_max_mark_transfer.setMinimum(0)
+        # 划痕检测的 SpinBox（如果存在）
+        if hasattr(self, 'spin_thresh_lower_scratch'):
+            self.spin_thresh_lower_scratch.setMinimum(0)
+        if hasattr(self, 'spin_thresh_upper_scratch'):
+            self.spin_thresh_upper_scratch.setMinimum(0)
+        
+        # 设置 Slider 范围（与 SpinBox 同步）
+        self.horizontalSlider.setMinimum(0)
+        self.horizontalSlider.setMaximum(255)
+        self.horizontalSlider_2.setMinimum(0)
+        self.horizontalSlider_2.setMaximum(255)
+        self.horizontalSlider_3.setMinimum(0)
+        self.horizontalSlider_3.setMaximum(255)
+        self.horizontalSlider_4.setMinimum(0)
+        self.horizontalSlider_4.setMaximum(255)
+        # Mark检测的 Slider
+        self.horizontalSlider_threshold_min_mark_transfer.setMinimum(0)
+        self.horizontalSlider_threshold_min_mark_transfer.setMaximum(255)
+        self.horizontalSlider_threshold_max_mark_transfer.setMinimum(0)
+        self.horizontalSlider_threshold_max_mark_transfer.setMaximum(255)
+        # 划痕检测的 Slider（如果存在）
+        if hasattr(self, 'horizontalSlider_thresh_lower_scratch'):
+            self.horizontalSlider_thresh_lower_scratch.setMinimum(0)
+            self.horizontalSlider_thresh_lower_scratch.setMaximum(255)
+        if hasattr(self, 'horizontalSlider_thresh_upper_scratch'):
+            self.horizontalSlider_thresh_upper_scratch.setMinimum(0)
+            self.horizontalSlider_thresh_upper_scratch.setMaximum(255)
+        
+        # 绑定 Slider 和 SpinBox 的双向同步
+        # 尺寸检测的 threshold
+        self.horizontalSlider_3.valueChanged.connect(self.spin_thresh_lower_size.setValue)
+        self.spin_thresh_lower_size.valueChanged.connect(self.horizontalSlider_3.setValue)
+        self.horizontalSlider_4.valueChanged.connect(self.spin_thresh_upper_size.setValue)
+        self.spin_thresh_upper_size.valueChanged.connect(self.horizontalSlider_4.setValue)
+        
+        # 锡球检测的 threshold
+        self.horizontalSlider.valueChanged.connect(self.spin_thresh_lower_ball.setValue)
+        self.spin_thresh_lower_ball.valueChanged.connect(self.horizontalSlider.setValue)
+        self.horizontalSlider_2.valueChanged.connect(self.spin_thresh_upper_ball.setValue)
+        self.spin_thresh_upper_ball.valueChanged.connect(self.horizontalSlider_2.setValue)
+        
+        # Mark检测的 threshold
+        self.horizontalSlider_threshold_min_mark_transfer.valueChanged.connect(self.spinBox_threshold_min_mark_transfer.setValue)
+        self.spinBox_threshold_min_mark_transfer.valueChanged.connect(self.horizontalSlider_threshold_min_mark_transfer.setValue)
+        self.horizontalSlider_threshold_max_mark_transfer.valueChanged.connect(self.spinBox_threshold_max_mark_transfer.setValue)
+        self.spinBox_threshold_max_mark_transfer.valueChanged.connect(self.horizontalSlider_threshold_max_mark_transfer.setValue)
+        
+        # 划痕检测的 threshold（如果存在）
+        if hasattr(self, 'horizontalSlider_thresh_lower_scratch') and hasattr(self, 'spin_thresh_lower_scratch'):
+            self.horizontalSlider_thresh_lower_scratch.valueChanged.connect(self.spin_thresh_lower_scratch.setValue)
+            self.spin_thresh_lower_scratch.valueChanged.connect(self.horizontalSlider_thresh_lower_scratch.setValue)
+        if hasattr(self, 'horizontalSlider_thresh_upper_scratch') and hasattr(self, 'spin_thresh_upper_scratch'):
+            self.horizontalSlider_thresh_upper_scratch.valueChanged.connect(self.spin_thresh_upper_scratch.setValue)
+            self.spin_thresh_upper_scratch.valueChanged.connect(self.horizontalSlider_thresh_upper_scratch.setValue)
+        
+        # 当 Slider 数值变化时自动触发测试（仅在初始化完成后）
+        # 锡球检测的 slider 触发 ball 检测
+        self.horizontalSlider.valueChanged.connect(lambda: self.auto_run_test("ball"))
+        self.horizontalSlider_2.valueChanged.connect(lambda: self.auto_run_test("ball"))
+        # 尺寸检测的 slider 触发 size 检测
+        self.horizontalSlider_3.valueChanged.connect(lambda: self.auto_run_test("size"))
+        self.horizontalSlider_4.valueChanged.connect(lambda: self.auto_run_test("size"))
+        # Mark检测的 slider 触发 mark 检测
+        self.horizontalSlider_threshold_min_mark_transfer.valueChanged.connect(lambda: self.auto_run_test("mark"))
+        self.horizontalSlider_threshold_max_mark_transfer.valueChanged.connect(lambda: self.auto_run_test("mark"))
+        
+        # 连接信号和槽
+        self.btn_load_template.clicked.connect(self.load_template_image)
+        self.btn_run_test.clicked.connect(lambda: self.run_template_test("all"))
+        self.btn_close.clicked.connect(self.accept)
+        self.btn_load_params.clicked.connect(self.update_params)
+        self.btn_ignore_roi.clicked.connect(lambda: self.create_roi("block"))
+        self.btn_confirm_load.clicked.connect(self.confirm_load)
+        self.btn_clear_roi.clicked.connect(lambda: self.clear_check_roi("block"))
+        # Mark检测区域相关按钮
+        self.pushButton_create_mark_roi_transfer.clicked.connect(lambda: self.create_roi("mark"))
+        self.pushButton__clear_mark_roi_transfer.clicked.connect(lambda: self.clear_check_roi("mark"))
+        # 划痕检测区域相关按钮（如果存在）
+        if hasattr(self, 'pushButton_create_scratch_roi_transfer'):
+            self.pushButton_create_scratch_roi_transfer.clicked.connect(lambda: self.create_roi("scratch"))
+        if hasattr(self, 'pushButton_clear_scratch_roi_transfer'):
+            self.pushButton_clear_scratch_roi_transfer.clicked.connect(lambda: self.clear_check_roi("scratch"))
+        # 锡球搜索ROI相关按钮（如果存在）
+        if hasattr(self, 'pushButton_create_ball_search_roi_transfer'):
+            self.pushButton_create_ball_search_roi_transfer.clicked.connect(lambda: self.create_roi("ball"))
+        if hasattr(self, 'pushButton_clear_ball_search_roi_transfer'):
+            self.pushButton_clear_ball_search_roi_transfer.clicked.connect(lambda: self.clear_check_roi("ball_search"))
+        
+        self.update_params()
+        # 锡球检测的 slider 触发 ball 检测
+        self.horizontalSlider.valueChanged.connect(lambda: self.auto_run_test("ball"))
+        self.horizontalSlider_2.valueChanged.connect(lambda: self.auto_run_test("ball"))
+        # 尺寸检测的 slider 触发 size 检测
+        self.horizontalSlider_3.valueChanged.connect(lambda: self.auto_run_test("size"))
+        self.horizontalSlider_4.valueChanged.connect(lambda: self.auto_run_test("size"))
+        # Mark检测的 slider 触发 mark 检测
+        self.horizontalSlider_threshold_min_mark_transfer.valueChanged.connect(lambda: self.auto_run_test("mark"))
+        self.horizontalSlider_threshold_max_mark_transfer.valueChanged.connect(lambda: self.auto_run_test("mark"))
+        # 划痕检测的 slider 触发 scratch 检测（如果存在）
+        if hasattr(self, 'horizontalSlider_thresh_lower_scratch'):
+            self.horizontalSlider_thresh_lower_scratch.valueChanged.connect(lambda: self.auto_run_test("scratch"))
+        if hasattr(self, 'horizontalSlider_thresh_upper_scratch'):
+            self.horizontalSlider_thresh_upper_scratch.valueChanged.connect(lambda: self.auto_run_test("scratch"))
+        
+        self.is_init = True
+    
+    def auto_run_test(self,detect_type=None):
+        """当 Slider 数值变化时自动触发测试（仅在初始化完成后）"""
+        if self.is_init and self.template_image is not None:
+            self.run_template_test(detect_type)
+
+    def load_template_image(self):
+        """加载模板图像"""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择模板图像",
+            "",
+            "图像文件 (*.jpg *.jpeg *.png *.bmp)"
+        )
+        
+        if file_path:
+            image = cv.imread(file_path)
+            if image is None:
+                QMessageBox.warning(self, "错误", "无法加载图像文件")
+                return
+            
+            # 保存模板图像
+            self.template_image = image.copy()
+            # 用于显示的模板图像（包含标记）
+            self._update_template_display_with_markers()
+            if hasattr(self, 'info_label'):
+                self.info_label.setText(f"已加载模板图像: {file_path}")
+    
+    def display_template_image(self, image):
+        if image is None:
+            return
+        if len(image.shape) == 2:
+            image = cv.cvtColor(image, cv.COLOR_GRAY2BGR)
+        height, width, channel = image.shape
+        label = self.template_image_label
+        bytes_per_line = 3 * width
+        q_image = QImage(image.data, width, height, bytes_per_line, QImage.Format_BGR888)
+        pixmap = QPixmap.fromImage(q_image)
+        # 获取 label 的大小，保持宽高比缩放
+        label_size = label.size()
+        # 如果label尺寸无效，先处理事件等待更新
+        if label_size.width() <= 0 or label_size.height() <= 0:
+            QApplication.processEvents()
+            label_size = label.size()
+            # 如果仍然无效，使用sizeHint或默认尺寸
+            if label_size.width() <= 0 or label_size.height() <= 0:
+                size_hint = label.sizeHint()
+                if size_hint.width() > 0 and size_hint.height() > 0:
+                    label_size = size_hint
+                else:
+                    # 使用默认尺寸
+                    label_size = label.geometry().size()
+                    if label_size.width() <= 0 or label_size.height() <= 0:
+                        label_size = label.parent().size() if label.parent() else label.size()
+        
+        scaled_pixmap = pixmap.scaled(label_size.width(), label_size.height(), 
+                                      Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        label.setScaledContents(False)
+        label.setPixmap(scaled_pixmap)
+        label.update()
+        QApplication.processEvents()
+    
+    def _update_template_display_with_markers(self):
+        """更新模板显示，包括绘制ROI屏蔽区域和Mark检测区域"""
+        if self.template_image is None:
+            return
+        
+        display_image = self.template_image.copy()
+        if len(display_image.shape) == 2:
+            display_image = cv.cvtColor(display_image, cv.COLOR_GRAY2BGR)
+        
+        # 绘制ROI屏蔽区域（黑色填充）
+        roi_block = self.local_params.get("roi_block", [])
+        if isinstance(roi_block, list):
+            for roi in roi_block:
+                if isinstance(roi, (tuple, list)) and len(roi) >= 4:
+                    x, y, w, h = int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3])
+                    cv.rectangle(display_image, (x, y), (x + w, y + h), (0, 0, 0), -1)
+        
+        # 绘制Mark检测区域（蓝色边框）
+        mark_roi = self.local_params.get("mark_roi", [])
+        if isinstance(mark_roi, list) and len(mark_roi) == 4:
+            x, y, w, h = int(mark_roi[0]), int(mark_roi[1]), int(mark_roi[2]), int(mark_roi[3])
+            cv.rectangle(display_image, (x, y), (x + w, y + h), (255, 0, 0), 2)
+        
+        # 绘制锡球搜索区域（黄色边框）
+        ball_search_roi = self.local_params.get("ball_search_roi", [])
+        if isinstance(ball_search_roi, list) and len(ball_search_roi) == 4:
+            x, y, w, h = int(ball_search_roi[0]), int(ball_search_roi[1]), int(ball_search_roi[2]), int(ball_search_roi[3])
+            cv.rectangle(display_image, (x, y), (x + w, y + h), (255, 255, 0), 2)
+        
+        # 绘制划痕检测区域（绿色边框）
+        scratch_roi = self.local_params.get("scratch_roi", [])
+        if isinstance(scratch_roi, list) and len(scratch_roi) == 4:
+            x, y, w, h = int(scratch_roi[0]), int(scratch_roi[1]), int(scratch_roi[2]), int(scratch_roi[3])
+            cv.rectangle(display_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        
+        self.display_template_image(display_image)
+    
+    def display_processed_image(self, image):
+        """在处理后图像 label 中显示图像"""
+        if image is None:
+            return
+        
+        # 转换为 RGB
+        if len(image.shape) == 3:
+            rgb_image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
+        else:
+            rgb_image = image
+        
+        h, w = rgb_image.shape[:2]
+        if len(rgb_image.shape) == 3:
+            channel = rgb_image.shape[2]
+            bytes_per_line = channel * w
+            q_img = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        else:
+            bytes_per_line = w
+            q_img = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_Grayscale8)
+        
+        pixmap = QPixmap.fromImage(q_img)
+        
+        # 缩放图像以适应 label（保持宽高比）
+        scaled_pixmap = pixmap.scaled(
+            self.processed_image_label.size(),
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation
+        )
+        
+        self.processed_image_label.setPixmap(scaled_pixmap)
+    
+    def _execute_detections(self, image, detect_type=None):
+        """执行所有检测（按照dry_thread.py的_detect_product方式）
+        
+        Args:
+            image: 输入的图像（灰度图或BGR图）
+            detect_type: 检测类型，可以是 "size", "ball", "mark", "scratch", "shift" 或 None（全部检测）
+        Returns:
+            product_info: dict 产品信息字典，包含：
+                - defect_type: list 缺陷类型列表，如 ["OK"] 或 ["NG", "Mark"]
+                - product_image_result: np.ndarray 产品图像结果
+                - size_result: tuple 尺寸检测结果元组 (success, msg, result_dict) 或 None
+                - ball_result: tuple 锡球检测结果元组 (success, msg, result_dict) 或 None
+                - mark_result: tuple Mark检测结果元组 (success, msg, result_dict) 或 None
+                - shift_result: tuple 偏移检测结果元组 (success, msg, result_dict) 或 None
+                - scratch_result: tuple 划痕检测结果元组 (success, msg, result_dict) 或 None
+        """
+        mark_check_enable = True if detect_type is None or detect_type == "mark" or detect_type == "all" else False
+        size_check_enable = True if detect_type is None or detect_type == "size" or detect_type == "all" else False
+        ball_check_enable = True if detect_type is None or detect_type == "ball" or detect_type == "all" else False
+        shift_check_enable = True if detect_type is None or detect_type == "shift" or detect_type == "all" else False
+        scratch_check_enable = True if detect_type is None or detect_type == "scratch" or detect_type == "all" else False
+        debug = False
+        if debug:
+            print(f"mark_check_enable: {mark_check_enable}, size_check_enable: {size_check_enable}, ball_check_enable: {ball_check_enable}, shift_check_enable: {shift_check_enable}, scratch_check_enable: {scratch_check_enable}")
+        # 初始化结果字典
+        product_info = {
+            "defect_type": ["OK"],
+            "product_image_result": None,
+            "size_result": None,
+            "ball_result": None,
+            "mark_result": None,
+            "shift_result": None,
+            "scratch_result": None,
+        }
+        
+        # Mark检测
+        if mark_check_enable:
+            mark_detect_result = self.mark_detector.detect(image)
+            if mark_detect_result[0]:  # success
+                product_info["mark_result"] = mark_detect_result
+                # 关键差异：检测到Mark判定为OK，未检测到Mark判定为NG
+                if not mark_detect_result[2]["is_valid"]:
+                    # 未检测到Mark，判定为NG
+                    if "OK" in product_info["defect_type"]:
+                        product_info["defect_type"].remove("OK")
+                    product_info["defect_type"].append("Mark")
+            else:
+                QMessageBox.warning(self, "警告", f"mark检测失败: {mark_detect_result[1]}")
+            if debug:
+                print(f"mark_detect_result: {mark_detect_result}")
+        
+        
+        # 尺寸检测
+        if size_check_enable:
+            size_detect_result = self.size_detector.detect(image)
+            if size_detect_result[0]:  # success
+                product_info["size_result"] = size_detect_result
+                if not size_detect_result[2]["is_valid"]:
+                    # 尺寸不合格，判定为NG
+                    if "OK" in product_info["defect_type"]:
+                        product_info["defect_type"].remove("OK")
+                    product_info["defect_type"].append("Size")
+            else:
+                QMessageBox.warning(self, "警告", f"size检测失败: {size_detect_result[1]}")
+            if debug:
+                print(f"size_detect_result: {size_detect_result}")
+        
+        
+        # 锡球检测
+        if ball_check_enable:
+            ball_detect_result = self.ball_detector.detect(image)
+            if ball_detect_result[0]:  # success
+                product_info["ball_result"] = ball_detect_result
+                if not ball_detect_result[2]["is_valid"]:
+                    # 锡球不合格，判定为NG
+                    if "OK" in product_info["defect_type"]:
+                        product_info["defect_type"].remove("OK")
+                    # 判断是数量问题还是质量问题
+                    expected_count = self.local_params.get("ball_count", 0)
+                    if ball_detect_result[2].get("ball_count", 0) != expected_count:
+                        product_info["defect_type"].append("Ball Count")
+                    else:
+                        product_info["defect_type"].append("Ball")
+            else:
+                QMessageBox.warning(self, "警告", f"ball检测失败: {ball_detect_result[1]}")
+            if debug:
+                print(f"ball_detect_result: {ball_detect_result}")
+        
+        
+        # 偏移检测（需要ball_result和size_result）
+        if shift_check_enable and product_info["ball_result"] is not None and product_info["size_result"] is not None:
+            # shift_detector.detect()期望接收dict参数，从tuple中提取result_dict
+            ball_result_dict = product_info["ball_result"][2]
+            size_result_dict = product_info["size_result"][2]
+            shift_detect_result = self.shift_detector.detect(ball_result_dict, size_result_dict)
+            
+            if shift_detect_result[0]:  # success
+                product_info["shift_result"] = shift_detect_result
+                if not shift_detect_result[2]["is_valid"]:
+                    if "OK" in product_info["defect_type"]:
+                        product_info["defect_type"].remove("OK")
+                    product_info["defect_type"].append("Shift")
+            else:
+                QMessageBox.warning(self, "警告", f"shift检测失败: {shift_detect_result[1]}")
+            if debug:
+                print(f"shift_detect_result: {shift_detect_result}")
+        
+        
+        # 划痕检测
+        if scratch_check_enable:
+            scratch_detect_result = self.scratch_detector.detect(image)
+            if scratch_detect_result[0]:  # success
+                product_info["scratch_result"] = scratch_detect_result
+                if not scratch_detect_result[2]["is_valid"]:
+                    # 划痕不合格，判定为NG
+                    if "OK" in product_info["defect_type"]:
+                        product_info["defect_type"].remove("OK")
+                    product_info["defect_type"].append("Scratch")
+            else:
+                QMessageBox.warning(self, "警告", f"scratch检测失败: {scratch_detect_result[1]}")
+            if debug:
+                print(f"scratch_detect_result: {scratch_detect_result}")
+        
+        
+        # 更新总体判定
+        if len(product_info["defect_type"]) > 1:
+            product_info["defect_type"][0] = "NG"
+        
+        # 生成产品图像结果（用于显示）
+        # 注意：这里使用原始图像，绘制会在run_template_test中进行
+        product_info["product_image_result"] = image.copy()
+        
+        return product_info
+
+    def _draw_detection_results(self, image_result: np.ndarray, product_info: dict):
+        """在图像上绘制检测结果（调用通用方法）
+        
+        Args:
+            image_result: 结果图像（BGR格式或灰度图）
+            product_info: 产品信息字典，包含检测结果元组
+        
+        Returns:
+            np.ndarray: 绘制后的图像
+        """
+        success, msg, result_image = draw_detection_results(image_result, product_info, mark_color="green")
+        if msg:
+            print(msg)
+        return result_image
+    
+    def _generate_result_text(self, product_info):
+        """生成检测结果文本
+        
+        Args:
+            product_info: 产品信息字典，包含检测结果
+        
+        Returns:
+            str: 格式化的结果文本
+        """
+        defect_type_list = product_info.get("defect_type", ["OK"])
+        roi_block = self.local_params.get("roi_block", [])
+        pixel_size = self.local_params.get("pixel_size", 0.001)
+        
+        should_detect_size = self.local_params.get("size_check_enable", True)
+        should_detect_ball = self.local_params.get("ball_check_enable", True)
+        should_detect_mark = self.local_params.get("mark_check_enable", True)
+        should_detect_scratch = self.local_params.get("scratch_check_enable", True)
+        should_detect_shift = self.local_params.get("shift_check_enable", True)
+        
+        result_text = "=" * 50 + "\n"
+        result_text += "处理结果详情\n"
+        result_text += "=" * 50 + "\n\n"
+        
+        # 总体结果
+        result_text += f"【总体结果】\n"
+        result_text += f"判定: {defect_type_list[0]}\n"
+        result_text += f"缺陷类型: {', '.join(defect_type_list[1:]) if len(defect_type_list) > 1 else '无'}\n"
+        result_text += f"当前屏蔽区域数量: {len(roi_block)}\n\n"
+        
+        # Mark检测结果
+        if should_detect_mark and product_info.get("mark_result") is not None:
+            try:
+                mark_result = product_info["mark_result"]
+                if isinstance(mark_result, tuple) and len(mark_result) >= 3:
+                    result_dict = mark_result[2]
+                    is_valid = result_dict.get("is_valid", False)
+                    mark_area = result_dict.get("mark_area", 0.0)
+                    mark_area_mm = result_dict.get("mark_area_mm", mark_area * pixel_size * pixel_size)
+                    
+                    result_text += f"【Mark检测】\n"
+                    # 关键差异：检测到Mark判定为OK，未检测到Mark判定为NG
+                    result_text += f"判定: {'OK (检测到Mark)' if is_valid else 'NG (未检测到Mark)'}\n"
+                    if mark_area > 0:
+                        result_text += f"Mark面积: {mark_area:.1f}像素² ({mark_area_mm:.2f}mm²)\n"
+                    else:
+                        result_text += f"Mark面积: 未检测到\n"
+                    result_text += "\n"
+            except Exception as e:
+                result_text += f"【Mark检测】\n"
+                result_text += f"错误: {str(e)}\n\n"
+        
+        # 尺寸检测结果
+        if should_detect_size and product_info.get("size_result") is not None:
+            try:
+                size_result = product_info["size_result"]
+                if isinstance(size_result, tuple) and len(size_result) >= 3:
+                    result_dict = size_result[2]
+                    width = result_dict.get("width", None)
+                    height = result_dict.get("height", None)
+                    is_valid = result_dict.get("is_valid", False)
+                    
+                    result_text += f"【尺寸检测】\n"
+                    result_text += f"判定: {'OK' if is_valid else 'NG'}\n"
+                    if width is not None and height is not None:
+                        result_text += f"产品尺寸: 宽 {width:.4f}mm × 高 {height:.4f}mm\n"
+                    else:
+                        result_text += f"产品尺寸: 检测失败\n"
+                    result_text += "\n"
+            except Exception as e:
+                result_text += f"【尺寸检测】\n"
+                result_text += f"错误: {str(e)}\n\n"
+        
+        # 锡球检测结果
+        if should_detect_ball and product_info.get("ball_result") is not None:
+            try:
+                ball_result = product_info["ball_result"]
+                if isinstance(ball_result, tuple) and len(ball_result) >= 3:
+                    result_dict = ball_result[2]
+                    ball_count = result_dict.get("ball_count", 0)
+                    avg_radius = result_dict.get("avg_radius", 0.0)
+                    avg_radius_mm = result_dict.get("avg_radius_mm", avg_radius * pixel_size)
+                    ok_details = result_dict.get("ok_details", [])
+                    ng_details = result_dict.get("ng_details", [])
+                    is_valid = result_dict.get("is_valid", False)
+                    
+                    result_text += f"【锡球检测】\n"
+                    result_text += f"判定: {'OK' if is_valid else 'NG'}\n"
+                    result_text += f"锡球总数: {ball_count}\n"
+                    expected_count = self.local_params.get("ball_count", 0)
+                    if expected_count > 0:
+                        result_text += f"期望数量: {expected_count}\n"
+                    if avg_radius_mm > 0:
+                        result_text += f"平均半径: {avg_radius_mm:.2f}mm\n"
+                    result_text += "\n"
+                    
+                    if ok_details:
+                        result_text += f"合格锡球 ({len(ok_details)}颗):\n"
+                        for i, detail in enumerate(ok_details, 1):
+                            radius_mm = detail.get("radius_mm", detail.get("radius", 0.0) * pixel_size)
+                            area_mm2 = detail.get("area_mm2", detail.get("area", 0.0) * pixel_size * pixel_size)
+                            center = detail.get("center", (0, 0))
+                            result_text += f"  锡球{i}: 半径={radius_mm:.2f}mm, "
+                            result_text += f"面积={area_mm2:.2f}mm², "
+                            result_text += f"中心=({center[0]}, {center[1]})\n"
+                        result_text += "\n"
+                    
+                    if ng_details:
+                        result_text += f"不合格锡球 ({len(ng_details)}颗):\n"
+                        for i, detail in enumerate(ng_details, 1):
+                            radius_mm = detail.get("radius_mm", detail.get("radius", 0.0) * pixel_size)
+                            area_mm2 = detail.get("area_mm2", detail.get("area", 0.0) * pixel_size * pixel_size)
+                            radius_diff_mm = detail.get("radius_diff_mm", 0.0)
+                            center = detail.get("center", (0, 0))
+                            result_text += f"  锡球{i}: 半径={radius_mm:.2f}mm, "
+                            result_text += f"面积={area_mm2:.2f}mm², "
+                            if radius_diff_mm > 0:
+                                result_text += f"半径偏差={radius_diff_mm:.2f}mm, "
+                            result_text += f"中心=({center[0]}, {center[1]})\n"
+                        result_text += "\n"
+                    
+                    # 偏移检测结果（与锡球检测一起显示）
+                    if should_detect_shift and product_info.get("shift_result") is not None:
+                        try:
+                            shift_result = product_info["shift_result"]
+                            shift_dict = shift_result[2]
+                            shift_x = shift_dict.get("shift_x", 0.0)
+                            shift_y = shift_dict.get("shift_y", 0.0)
+                            ball_center = shift_dict.get("ball_center", None)
+                            size_center = shift_dict.get("size_center", None)
+                            is_valid_shift = shift_dict.get("is_valid", False)
+                            
+                            shift_x_tolerance = self.local_params.get("shift_x_tolerance", 0.1)
+                            shift_y_tolerance = self.local_params.get("shift_y_tolerance", 0.1)
+                            
+                            result_text += f"【偏移检测】\n"
+                            result_text += f"判定: {'OK' if is_valid_shift else 'NG'}\n"
+                            result_text += f"偏移量: X={shift_x:.4f}mm, Y={shift_y:.4f}mm\n"
+                            result_text += f"容差: X=±{shift_x_tolerance:.4f}mm, Y=±{shift_y_tolerance:.4f}mm\n"
+                            if ball_center is not None and len(ball_center) >= 2:
+                                result_text += f"球中心位置: ({ball_center[0]:.2f}, {ball_center[1]:.2f}) 像素\n"
+                            if size_center is not None and len(size_center) >= 2:
+                                result_text += f"尺寸中心位置: ({size_center[0]:.2f}, {size_center[1]:.2f}) 像素\n"
+                            result_text += "\n"
+                        except Exception as e:
+                            result_text += f"【偏移检测】\n"
+                            result_text += f"错误: {str(e)}\n\n"
+                    elif should_detect_shift:
+                        result_text += f"【偏移检测】\n"
+                        result_text += f"需要同时启用尺寸检测和锡球检测\n\n"
+            except Exception as e:
+                result_text += f"【锡球检测】\n"
+                result_text += f"错误: {str(e)}\n\n"
+        
+        # 划痕检测结果
+        if should_detect_scratch and product_info.get("scratch_result") is not None:
+            try:
+                scratch_result = product_info["scratch_result"]
+                if isinstance(scratch_result, tuple) and len(scratch_result) >= 3:
+                    result_dict = scratch_result[2]
+                    is_valid = result_dict.get("is_valid", False)
+                    ng_scratch_contours = result_dict.get("ng_scratch_contours", [])
+                    
+                    result_text += f"【划痕检测】\n"
+                    result_text += f"判定: {'OK' if is_valid else 'NG'}\n"
+                    scratch_length_threshold = self.local_params.get("scratch_length", 5.0)
+                    result_text += f"划痕长度阈值: {scratch_length_threshold}mm\n"
+                    if ng_scratch_contours:
+                        result_text += f"检测到 {len(ng_scratch_contours)} 条NG划痕\n"
+                    result_text += "\n"
+            except Exception as e:
+                result_text += f"【划痕检测】\n"
+                result_text += f"错误: {str(e)}\n\n"
+        
+        result_text += "=" * 50 + "\n"
+        
+        return result_text
+    
+    def run_template_test(self, detect_type=None):
+        """运行模板测试：根据检测开关执行所有启用的检测
+        
+        Args:
+            detect_type: 已废弃，保留以兼容旧代码。检测由检测开关控制。
+        """
+        # 检查是否已加载测试图像和模板图像
+
+        try:
+            # 从界面更新参数到local_params
+            self._update_params_from_ui()
+            self.update_params()
+
+            
+            if self.local_params.get("ball_area_min_threshold") >= self.local_params.get("ball_area_max_threshold"):
+                QMessageBox.warning(self, "错误", "锡球面积下限必须小于上限")
+                return
+            
+            if self.template_image is None:
+                QMessageBox.warning(self, "错误", "请先加载模板图像")
+                return
+            
+            # 转换图像为灰度图
+            if len(self.template_image.shape) == 3:
+                template_gray = cv.cvtColor(self.template_image, cv.COLOR_BGR2GRAY)
+            else:
+                template_gray = self.template_image
+            
+            # 执行所有检测（按照dry_thread.py的方式）
+            product_info = self._execute_detections(template_gray, detect_type)
+            
+            # 绘制检测结果
+            image_result = self._draw_detection_results(self.template_image, product_info)
+            
+            # 拼接预处理图像和结果图像
+            if detect_type == "all":
+                image_binary = cv.inRange(template_gray, self.local_params["min_threshold_mark"], self.local_params["max_threshold_mark"])
+            elif detect_type == "size":
+                image_gray = cv.equalizeHist(template_gray)
+                image_binary = cv.inRange(image_gray, self.local_params["min_threshold_size"], self.local_params["max_threshold_size"])
+                image_binary = cv.bitwise_not(image_binary)
+            elif detect_type == "ball":
+                image_binary = cv.inRange(template_gray, self.local_params["min_threshold_ball"], self.local_params["max_threshold_ball"])
+            elif detect_type == "mark":
+                image_binary = cv.inRange(template_gray, self.local_params["min_threshold_mark"], self.local_params["max_threshold_mark"])
+            elif detect_type == "scratch":
+                image_binary = cv.inRange(template_gray, self.local_params["min_threshold_scratch"], self.local_params["max_threshold_scratch"])
+            else:
+                image_binary = cv.inRange(template_gray, self.local_params["min_threshold_mark"], self.local_params["max_threshold_mark"])
+
+            image_binary = cv.cvtColor(image_binary, cv.COLOR_GRAY2BGR)
+            self.processed_image = np.vstack((image_binary, image_result))
+            self.display_processed_image(self.processed_image)
+            
+            # 生成并显示文本结果
+            result_text = self._generate_result_text(product_info)
+            self.textEdit_test_result.setPlainText(result_text)
+            
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"测试运行失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    
+    def update_params(self):
+        """加载参数"""
+        if self.config_manager is None:
+            QMessageBox.warning(self, "错误", "请先加载配方")
+            return     
+        try:
+            pixel_size = self.local_params["pixel_size"]
+            product_size = self.local_params["product_size"]
+            roi_block = self.local_params["roi_block"]
+            #————————————————————————ball参数————————————————————————————————
+            min_threshold_ball = self.local_params["min_threshold_ball"]
+            max_threshold_ball = self.local_params["max_threshold_ball"]
+            ball_area_min_threshold = self.local_params["ball_area_min_threshold"]
+            ball_area_max_threshold = self.local_params["ball_area_max_threshold"]
+            ball_count = self.local_params["ball_count"]
+            ball_radius_tolerance = self.local_params["ball_radius_tolerance"]
+            std_radius = self.local_params["std_radius"]
+            ball_search_roi = self.local_params.get("ball_search_roi", [])
+
+            self.ball_detector.update_params(
+                {
+                    "min_threshold": min_threshold_ball,
+                    "max_threshold": max_threshold_ball,
+                    "ball_area_min_threshold": ball_area_min_threshold,
+                    "ball_area_max_threshold": ball_area_max_threshold,
+                    "ball_radius_tolerance": ball_radius_tolerance,
+                    "std_radius": std_radius,
+                    "expected_ball_count": ball_count,
+                    "pixel_size": pixel_size,
+                    "ball_search_roi": ball_search_roi,
+                })
+            
+            #————————————————————size参数————————————————————————
+            product_size_tolerance_x = self.local_params["product_size_tolerance_x"]
+            product_size_tolerance_y = self.local_params["product_size_tolerance_y"]
+            min_threshold_size = self.local_params["min_threshold_size"]
+            max_threshold_size = self.local_params["max_threshold_size"]
+
+            self.size_detector.update_params(
+                {
+                    "min_threshold": min_threshold_size,
+                    "max_threshold": max_threshold_size,
+                    "allow_tolerance_x": product_size_tolerance_x,
+                    "allow_tolerance_y": product_size_tolerance_y,
+                    "roi_width": 80,
+                    "std_size": (product_size[0], product_size[1]),
+                    "pixel_size": pixel_size,
+                })
+            
+            #————————————————————————mark参数——————————————————————
+            min_threshold_mark = self.local_params["min_threshold_mark"]
+            max_threshold_mark = self.local_params["max_threshold_mark"]
+            min_mark_area = self.local_params["min_mark_area"]
+            mark_roi = self.local_params.get("mark_roi", [])
+            mark_detect_mode = self.local_params.get("mark_detect_mode", "manual")
+            self.mark_detector.update_params(
+                {
+                    "min_threshold": min_threshold_mark,
+                    "max_threshold": max_threshold_mark,
+                    "min_mark_area": min_mark_area,
+                    "pixel_size": pixel_size,
+                    "mark_detect_mode":mark_detect_mode,
+                    "mark_roi": mark_roi,
+                })
+            #————————————————————————scratch参数——————————————————————
+            min_threshold_scratch = self.local_params.get("min_threshold_scratch", 0)
+            max_threshold_scratch = self.local_params.get("max_threshold_scratch", 255)
+            scratch_length = self.local_params.get("scratch_length", 5.0)
+            scratch_roi = self.local_params.get("scratch_roi", [])
+ 
+            if hasattr(self, 'lineEdit_scratch_length'):
+                self.lineEdit_scratch_length.setText(str(scratch_length))
+            
+            self.scratch_detector.update_params(
+                {
+                    "min_threshold": min_threshold_scratch,
+                    "max_threshold": max_threshold_scratch,
+                    "scratch_length_threshold": scratch_length,
+                    "pixel_size": pixel_size,
+                    "scratch_roi": scratch_roi,
+                    "roi_blocks": roi_block,
+                })
+            #——————————————————————偏移检测参数——————————————————————
+            shift_x_tolerance = self.local_params.get("shift_x_tolerance", 0.1)
+            shift_y_tolerance = self.local_params.get("shift_y_tolerance", 0.1)
+            self.shift_detector.update_params(
+                {
+                    "allow_tolerance_x": shift_x_tolerance,
+                    "allow_tolerance_y": shift_y_tolerance,
+                    "pixel_size": pixel_size,
+                    "error_correction_factor": 0.7,
+                })
+   
+            if not self.is_init:
+                size_check_enable = self.local_params.get("size_check_enable", True)
+                ball_check_enable = self.local_params.get("ball_check_enable", True)
+                mark_check_enable = self.local_params.get("mark_check_enable", True)
+                scratch_check_enable = self.local_params.get("scratch_check_enable", True)
+                shift_check_enable = self.local_params.get("shift_check_enable", True)
+                if hasattr(self, 'radioButton_size_check_enable'):
+                    self.radioButton_size_check_enable.setChecked(bool(size_check_enable))
+                if hasattr(self, 'radioButton_ball_check_enable'):
+                    self.radioButton_ball_check_enable.setChecked(bool(ball_check_enable))
+                if hasattr(self, 'radioButton_mark_check_enable'):
+                    self.radioButton_mark_check_enable.setChecked(bool(mark_check_enable))
+                if hasattr(self, 'radioButton_scratch_check_enable'):
+                    self.radioButton_scratch_check_enable.setChecked(bool(scratch_check_enable))
+                if hasattr(self, 'radioButton_shift_check_enable'):
+                    self.radioButton_shift_check_enable.setChecked(bool(shift_check_enable))
+                self.spin_thresh_lower_ball.setValue(min_threshold_ball)
+                self.spin_thresh_upper_ball.setValue(max_threshold_ball)
+                self.horizontalSlider.setValue(min_threshold_ball)
+                self.horizontalSlider_2.setValue(max_threshold_ball)
+                self.spin_area_min.setValue(ball_area_min_threshold)
+                self.spin_area_max.setValue(ball_area_max_threshold)
+                if hasattr(self, 'line_ballnum_allow'):
+                    self.line_ballnum_allow.setText(str(ball_count))
+                if hasattr(self, 'line_ball_radius_tolerance_allow'):
+                    self.line_ball_radius_tolerance_allow.setText(str(ball_radius_tolerance))
+                if hasattr(self, 'lineEdit_ball_radius_std'):
+                    self.lineEdit_ball_radius_std.setText(str(std_radius))
+                if hasattr(self, 'line_X_tolerance_allow'):
+                    self.line_X_tolerance_allow.setText(str(product_size_tolerance_x))
+                if hasattr(self, 'line_Y_tolerance_allow'):
+                    self.line_Y_tolerance_allow.setText(str(product_size_tolerance_y))
+                self.spin_thresh_lower_size.setValue(int(min_threshold_size))
+                self.spin_thresh_upper_size.setValue(int(max_threshold_size))
+                self.horizontalSlider_3.setValue(int(min_threshold_size))
+                self.horizontalSlider_4.setValue(int(max_threshold_size))
+                self.spinBox_threshold_min_mark_transfer.setValue(int(min_threshold_mark))
+                self.spinBox_threshold_max_mark_transfer.setValue(int(max_threshold_mark))
+                if hasattr(self, 'lineEdit_min_mak_area_transfer'):
+                    self.lineEdit_min_mak_area_transfer.setText(str(min_mark_area))
+                self.horizontalSlider_threshold_min_mark_transfer.setValue(int(min_threshold_mark))
+                self.horizontalSlider_threshold_max_mark_transfer.setValue(int(max_threshold_mark))
+                if hasattr(self, 'spin_thresh_lower_scratch'):
+                    self.spin_thresh_lower_scratch.setValue(int(min_threshold_scratch))
+                if hasattr(self, 'spin_thresh_upper_scratch'):
+                    self.spin_thresh_upper_scratch.setValue(int(max_threshold_scratch))
+                if hasattr(self, 'horizontalSlider_thresh_lower_scratch'):
+                    self.horizontalSlider_thresh_lower_scratch.setValue(int(min_threshold_scratch))
+                if hasattr(self, 'horizontalSlider_thresh_upper_scratch'):
+                    self.horizontalSlider_thresh_upper_scratch.setValue(int(max_threshold_scratch))
+                if hasattr(self, 'lineEdit_shift_x_tolerance'):
+                    self.lineEdit_shift_x_tolerance.setText(str(shift_x_tolerance))
+                if hasattr(self, 'lineEdit_shift_y_tolerance'):
+                    self.lineEdit_shift_y_tolerance.setText(str(shift_y_tolerance))
+                
+                # 确保UI更新完成，特别是label的尺寸
+                QApplication.processEvents()
+                
+                template_path = self.config_manager.get_key("work_transfer_params", "golden_template_path")
+                if template_path:
+                    template = cv.imread(template_path)
+                    if template is not None:
+                        self.template_image = template.copy()
+                        # 再次处理事件，确保label尺寸已更新
+                        QApplication.processEvents()
+                        self._update_template_display_with_markers()
+                QApplication.processEvents()
+                QMessageBox.information(self, "成功", "参数已成功加载")
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"加载参数失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+      
+    def _update_params_from_ui(self):
+        """从当前界面获取用户设置的参数并写入local_params中"""
+        try:
+            # 锡球检测参数
+            self.local_params["min_threshold_ball"] = int(self.spin_thresh_lower_ball.value())
+            self.local_params["max_threshold_ball"] = int(self.spin_thresh_upper_ball.value())
+            self.local_params["ball_area_min_threshold"] = int(self.spin_area_min.value())
+            self.local_params["ball_area_max_threshold"] = int(self.spin_area_max.value())
+            
+            # 从LineEdit获取参数（需要处理空值）
+            if hasattr(self, 'line_ballnum_allow') and self.line_ballnum_allow.text().strip():
+                self.local_params["ball_count"] = int(self.line_ballnum_allow.text())
+            if hasattr(self, 'line_ball_radius_tolerance_allow') and self.line_ball_radius_tolerance_allow.text().strip():
+                self.local_params["ball_radius_tolerance"] = float(self.line_ball_radius_tolerance_allow.text())
+            if hasattr(self, 'lineEdit_ball_radius_std') and self.lineEdit_ball_radius_std.text().strip():
+                self.local_params["std_radius"] = float(self.lineEdit_ball_radius_std.text())
+            
+            # 尺寸检测参数
+            if hasattr(self, 'spin_thresh_lower_size'):
+                self.local_params["min_threshold_size"] = int(self.spin_thresh_lower_size.value())
+            if hasattr(self, 'spin_thresh_upper_size'):
+                self.local_params["max_threshold_size"] = int(self.spin_thresh_upper_size.value())
+            
+            # 尺寸容差参数
+            if hasattr(self, 'line_X_tolerance_allow') and hasattr(self, 'line_Y_tolerance_allow'):
+                x_text = self.line_X_tolerance_allow.text().strip()
+                y_text = self.line_Y_tolerance_allow.text().strip()
+                if x_text and y_text:
+                    self.local_params["product_size_tolerance_x"] = float(x_text)
+                    self.local_params["product_size_tolerance_y"] = float(y_text)
+            
+            # Mark检测参数
+            if hasattr(self, 'spinBox_threshold_min_mark_transfer'):
+                self.local_params["min_threshold_mark"] = int(self.spinBox_threshold_min_mark_transfer.value())
+            if hasattr(self, 'spinBox_threshold_max_mark_transfer'):
+                self.local_params["max_threshold_mark"] = int(self.spinBox_threshold_max_mark_transfer.value())
+            if hasattr(self, 'lineEdit_min_mak_area_transfer') and self.lineEdit_min_mak_area_transfer.text().strip():
+                self.local_params["min_mark_area"] = int(float(self.lineEdit_min_mak_area_transfer.text()))
+            # 划痕检测参数
+            if hasattr(self, 'spin_thresh_lower_scratch'):
+                self.local_params["min_threshold_scratch"] = int(self.spin_thresh_lower_scratch.value())
+            if hasattr(self, 'spin_thresh_upper_scratch'):
+                self.local_params["max_threshold_scratch"] = int(self.spin_thresh_upper_scratch.value())
+            if hasattr(self, 'lineEdit_scratch_length') and self.lineEdit_scratch_length.text().strip():
+                self.local_params["scratch_length"] = float(self.lineEdit_scratch_length.text())
+            self.local_params["mark_detect_mode"]= "auto" if self.radioButton_mark_auto_transfer.isChecked() else "manual"
+            # 偏移检测容差参数
+            if hasattr(self, 'lineEdit_shift_x_tolerance') and self.lineEdit_shift_x_tolerance.text().strip():
+                self.local_params["shift_x_tolerance"] = float(self.lineEdit_shift_x_tolerance.text())
+            if hasattr(self, 'lineEdit_shift_y_tolerance') and self.lineEdit_shift_y_tolerance.text().strip():
+                self.local_params["shift_y_tolerance"] = float(self.lineEdit_shift_y_tolerance.text())
+            
+            # 检测开关参数
+            if hasattr(self, 'radioButton_size_check_enable'):
+                self.local_params["size_check_enable"] = self.radioButton_size_check_enable.isChecked()
+            if hasattr(self, 'radioButton_ball_check_enable'):
+                self.local_params["ball_check_enable"] = self.radioButton_ball_check_enable.isChecked()
+            if hasattr(self, 'radioButton_mark_check_enable'):
+                self.local_params["mark_check_enable"] = self.radioButton_mark_check_enable.isChecked()
+            if hasattr(self, 'radioButton_scratch_check_enable'):
+                self.local_params["scratch_check_enable"] = self.radioButton_scratch_check_enable.isChecked()
+            if hasattr(self, 'radioButton_shift_check_enable'):
+                self.local_params["shift_check_enable"] = self.radioButton_shift_check_enable.isChecked()
+            
+            # ROI参数已经在create_roi中更新，这里不需要重复更新
+            # 但确保它们存在
+            if "roi_block" not in self.local_params:
+                self.local_params["roi_block"] = []
+            if "mark_roi" not in self.local_params:
+                self.local_params["mark_roi"] = []
+            if "ball_search_roi" not in self.local_params:
+                self.local_params["ball_search_roi"] = []
+            if "scratch_roi" not in self.local_params:
+                self.local_params["scratch_roi"] = []
+                
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"更新参数失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+   
+    def create_roi(self, detect_type: str):
+        """根据detect_type创建对应的ROI区域
+        
+        Args:
+            detect_type: 检测类型
+                - "ball" → 创建 ball_search_roi（单个列表 [x, y, w, h]）
+                - "mark" → 创建 mark_roi（单个列表 [x, y, w, h]）
+                - "scratch" → 创建 scratch_roi（单个列表 [x, y, w, h]）
+                - "block" → 创建 roi_block（屏蔽区域，追加到列表）
+        """
+        # 检查模板图像是否已加载
+        if self.template_image is None:
+            QMessageBox.warning(self, "错误", "请先加载模板图像")
+            return
+        
+        # 准备显示图像
+        image = self.template_image.copy()
+        img_disp = image.copy()
+        if len(img_disp.shape) == 2:
+            img_disp = cv.cvtColor(img_disp, cv.COLOR_GRAY2BGR)
+        
+        try:
+            # 根据detect_type设置窗口名称
+            window_name_map = {
+                "ball": "Ball Search ROI Selection",
+                "mark": "Mark ROI Selection",
+                "scratch": "Scratch ROI Selection",
+                "block": "Block ROI Selection"
+            }
+            window_name = window_name_map.get(detect_type, "ROI Selection")
+            
+            # 创建窗口并设置为可调整大小模式
+            cv.namedWindow(window_name, cv.WINDOW_NORMAL)
+            # 设置窗口大小为图像尺寸
+            h, w = img_disp.shape[:2]
+            cv.resizeWindow(window_name, w, h)
+            
+            # 使用selectROI让用户框选ROI
+            roi = selectROI(window_name, img_disp, showCrosshair=True, fromCenter=False,
+                           rect_color=(0, 255, 0), line_thickness=2)
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"ROI选择失败: {str(e)}")
+            return
+        
+        x, y, w, h = roi
+        if w == 0 or h == 0:
+            return
+        
+        # 根据detect_type保存到对应的参数位置
+        if detect_type == "block":
+            # 屏蔽区域：追加到列表
+            if not isinstance(self.local_params.get("roi_block"), list):
+                self.local_params["roi_block"] = []
+            roi_tuple = (int(x), int(y), int(w), int(h))
+            if roi_tuple not in self.local_params["roi_block"]:
+                self.local_params["roi_block"].append(roi_tuple)
+        elif detect_type == "ball":
+            # 锡球搜索区域：单个列表
+            self.local_params["ball_search_roi"] = [int(x), int(y), int(w), int(h)]
+        elif detect_type == "mark":
+            # Mark检测区域：单个列表
+            self.local_params["mark_roi"] = [int(x), int(y), int(w), int(h)]
+        elif detect_type == "scratch":
+            # 划痕检测区域：单个列表
+            self.local_params["scratch_roi"] = [int(x), int(y), int(w), int(h)]
+        else:
+            QMessageBox.warning(self, "错误", f"未知的detect_type: {detect_type}")
+            return
+        
+        # 更新显示（包含所有标记）
+        self._update_template_display_with_markers()
+    
+    def clear_check_roi(self, detect_type):
+        """清除检测区域"""
+        # 根据detect_type映射到正确的参数名
+        roi_key_map = {
+            "mark": "mark_roi",
+            "ball_search": "ball_search_roi",
+            "scratch": "scratch_roi",
+            "block": "roi_block"
+        }
+        roi_key = roi_key_map.get(detect_type)
+        if roi_key:
+            self.local_params[roi_key] = []
+
+        # 更新显示（移除区域标记）
+        self._update_template_display_with_markers()
+    
+    def confirm_load(self):
+        """确认并保存参数到配置文件"""
+        try:
+            self._update_params_from_ui()
+            self.config_manager.set_section("work_transfer_params", self.local_params)
+            QMessageBox.information(self, "成功", "参数已成功保存")
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"保存参数失败: {str(e)}")
+            import traceback
+            traceback.print_exc()
+    

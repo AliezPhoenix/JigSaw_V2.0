@@ -1,0 +1,139 @@
+{
+  "work_dry_params": {
+    "product_type": "BGA",
+    "product_size": [
+      10.0,
+      15.0
+    ],
+    "ball_count": 200,
+    "min_threshold_size": 172,
+    "max_threshold_size": 255,
+    "max_threshold_ball": 255,
+    "min_threshold_ball": 196,
+    "min_threshold_mark": 147,
+    "max_threshold_mark": 255,
+    "ball_area_max_threshold": 1500,
+    "ball_area_min_threshold": 500,
+    "ball_radius_tolerance": 0.05,
+    "std_radius": 0.17,
+    "min_mark_area": 2000,
+    "product_size_tolerance_x": 0.07,
+    "product_size_tolerance_y": 0.07,
+    "template_threshold": 0.7,
+    "total_cols": 6,
+    "total_rows": 15,
+    "current_col": 2,
+    "current_row": 2,
+    "product_count": 90,
+    "golden_template_path": "D:/Data/JigSaw_Rebuild/Image/LOT_SN_Dry_ORI_NONE_20260116202135.bmp",
+    "search_roi": [
+      279,
+      87,
+      3531,
+      2865
+    ],
+    "roi_block": [],
+    "mark_roi": [
+      484,
+      577,
+      220,
+      648
+    ],
+    "ball_search_roi": [
+      64,
+      59,
+      1069,
+      1629
+    ],
+    "scratch_roi": [],
+    "min_threshold_scratch": 111,
+    "max_threshold_scratch": 255,
+    "scratch_length": 1.0,
+    "size_check_enable": true,
+    "ball_check_enable": true,
+    "mark_check_enable": true,
+    "scratch_check_enable": false,
+    "shift_check_enable": true,
+    "shift_x_tolerance": 0.05,
+    "shift_y_tolerance": 0.05,
+    "pixel_size": 0.008823
+  },
+  "work_transfer_params": {
+    "product_type": "BGA",
+    "product_size": [
+      10.0,
+      15.0
+    ],
+    "ball_count": 0,
+    "min_threshold_size": 0,
+    "max_threshold_size": 255,
+    "max_threshold_ball": 250,
+    "min_threshold_ball": 117,
+    "min_threshold_mark": 172,
+    "max_threshold_mark": 255,
+    "ball_area_max_threshold": 400,
+    "ball_area_min_threshold": 100,
+    "ball_radius_tolerance": 0.2,
+    "std_radius": 0.2,
+    "min_mark_area": 400,
+    "product_size_tolerance_x": 0.2,
+    "product_size_tolerance_y": 0.2,
+    "template_threshold": 0.5,
+    "total_cols": 6,
+    "total_rows": 15,
+    "current_col": 5,
+    "current_row": 6,
+    "product_count": 90,
+    "golden_template_path": "D:/Data/JigSaw_Rebuild/LOT_SN_Dry_ORI_NONE_20260116202240.bmp",
+    "search_roi": [],
+    "roi_block": [],
+    "mark_roi": [
+      504,
+      639,
+      204,
+      479
+    ],
+    "ball_search_roi": [],
+    "size_check_enable": false,
+    "ball_check_enable": false,
+    "mark_check_enable": true,
+    "scratch_check_enable": false,
+    "shift_check_enable": true,
+    "shift_x_tolerance": 0.1,
+    "shift_y_tolerance": 0.1,
+    "mark_detect_mode": "manual",
+    "pixel_size": 0.008823,
+    "scratch_roi": []
+  },
+  "work_sucker1_params": {
+    "product_type": null,
+    "product_size": [
+      0.0,
+      0.0
+    ]
+  },
+  "work_sucker2_params": {
+    "product_type": null,
+    "product_size": [
+      0.0,
+      0.0
+    ]
+  },
+  "work_fulltray_params": {
+    "product_type": "BGA",
+    "rows": 8,
+    "cols": 16,
+    "empty_tray_template_path": null,
+    "grid_roi": [
+      12,
+      530,
+      2365,
+      973
+    ],
+    "diff_threshold": 0.15,
+    "brightness_threshold": 0.1,
+    "feature_threshold": 0.05,
+    "model_path": "D:/DATA/JIGSAW_Rebuild/models/final_model.pth",
+    "input_size": 150
+  }
+}
