@@ -14,7 +14,7 @@ from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import QFile, Qt
 from PyQt5.QtWidgets import QLabel,QApplication
 import numpy as np
-from src.support.support_funs import selectROI
+from src.support.support_funs import selectROI, execute_product_detection, draw_detection_results
 from ImageViewerWidget import ImageViewerWidget
 from LogViewerWidget import LogViewerWidget
 class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
@@ -116,8 +116,8 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
 
         self.btn_create_new_template.clicked.connect(lambda: self.create_new_tmepalte("dry"))
         self.btn_create_new_template_transfer.clicked.connect(lambda: self.create_new_tmepalte("transfer"))
-        self.pushButton_tempaltematch.clicked.connect(self.dry_template_validity_test)
-        self.pushButton_transfer_template_match.clicked.connect(self.transfer_template_validity_test)
+        self.pushButton_tempaltematch.clicked.connect(lambda: self.template_validity_test("dry"))
+        self.pushButton_transfer_template_match.clicked.connect(lambda: self.template_validity_test("transfer"))
         self.pushButton_current_image_select_dry.clicked.connect(lambda: self.load_current_image("dry"))
         self.pushButton_current_image_select_transfer.clicked.connect(lambda: self.load_current_image("transfer"))
         self.pushButton_create_checkable_roi_dry.clicked.connect(lambda: self.create_search_roi("dry"))
@@ -576,17 +576,116 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self._update_label_from_image(getattr(self,f"label_current_cam_live_{station}"),image)
             
 
-    def template_validity_test(self,station):
-        if station == "dry":
-            pass
-        elif station == "transfer":
-            pass
+    def _get_detectors_for_station(self, station):
+        """根据工位参数创建临时检测器"""
+        params_section = "work_dry_params" if station == "dry" else "work_transfer_params"
+        try:
+            params = self.config_manager.get_section(params_section)
+        except KeyError:
+            params = {}
 
-    def create_search_roi(self,station):
-        if station == "dry":
-            pass
-        elif station == "transfer":
-            pass
+        from src.threads.dry_thread import DryThread
+        from src.threads.transfer_thread import TransferThread
+        thread_class = DryThread if station == "dry" else TransferThread
+        temp = thread_class(params=params, HM=self.hardware_manager, MM=self.modbus_manager, ui=self)
+        return {
+            "ball_detector": temp.ball_detector,
+            "size_detector": temp.size_detector,
+            "mark_detector": temp.mark_detector,
+            "shift_detector": temp.shift_detector,
+            "scratch_detector": temp.scratch_detector,
+        }, temp.template_detector, params
+
+    def template_validity_test(self, station):
+        """
+        1. template_detector 定位产品
+        2. execute_product_detection 检测 
+        3. 绘制结果 
+        4. 显示到对应工位 tab
+        """
+        image = self.current_image.get(station)
+        if image is None:
+            QMessageBox.warning(self, "错误", "请先选择当前图像❌")
+            return
+
+        detectors, template_detector, params = self._get_detectors_for_station(station)
+        template_path = params.get("golden_template_path")
+        if not template_path or not os.path.exists(template_path):
+            QMessageBox.warning(self, "错误", "模板路径无效或文件不存在❌")
+            return
+
+        template = cv.imread(template_path)
+        if template is None:
+            QMessageBox.warning(self, "错误", "无法读取模板图像❌")
+            return
+        img_h, img_w = image.shape[:2]
+        search_roi = params.get("search_roi") or []
+        if not (isinstance(search_roi, (list, tuple)) and len(search_roi) >= 4):
+            search_roi = [0, 0, img_w, img_h]
+        template_detector.update_params({"template_threshold": params.get("template_threshold", 0.7), "search_roi": search_roi})
+
+        detect_image = cv.blur(image, (3, 3)) if station == "transfer" else image
+        template_pos_list = template_detector.detect(template, detect_image)
+        if not template_pos_list:
+            QMessageBox.warning(self, "提示", "未检测到产品位置❌")
+            return
+
+        template_h, template_w = template.shape[:2]
+        image_result = cv.cvtColor(image.copy(), cv.COLOR_GRAY2BGR) if len(image.shape) == 2 else image.copy()
+        detect_params = {
+            "mark_check_enable": params.get("mark_check_enable", True),
+            "size_check_enable": params.get("size_check_enable", True),
+            "ball_check_enable": params.get("ball_check_enable", True),
+            "shift_check_enable": params.get("shift_check_enable", True),
+            "scratch_check_enable": params.get("scratch_check_enable", True),
+            "allow_mark": params.get("allow_mark", False),
+        }
+
+        for x, y in template_pos_list:
+            if x + template_w > img_w or y + template_h > img_h:
+                continue
+            product_image = image[y:y + template_h, x:x + template_w]
+            success, msg, product_info = execute_product_detection(
+                image=product_image,
+                detectors=detectors,
+                params=detect_params,
+                detect_type=None,
+                early_return_on_ng=False,
+                error_callback=None
+            )
+            product_info["x"], product_info["y"] = x, y
+            if not success:
+                continue
+            _, _, drawn_patch = draw_detection_results(
+                product_image.copy(),
+                product_info,
+                mark_color="green" if product_info.get("defect_type") == ["OK"] else "red"
+            )
+            if drawn_patch is not None:
+                image_result[y:y + template_h, x:x + template_w] = drawn_patch
+        cv.putText(image_result, f"Search ROI", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+        cv.rectangle(image_result, (search_roi[0], search_roi[1]), (search_roi[0] + search_roi[2], search_roi[1] + search_roi[3]), (255, 255, 0), 5)
+        self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), image_result)
+    def create_search_roi(self, station):
+        """使用 selectROI 在当前工位图像上框选 search_roi，并保存到配置"""
+        image = self.current_image.get(station)
+        if image is None:
+            QMessageBox.warning(self, "错误", "请先选择当前图像❌")
+            return
+
+        cv.namedWindow("创建 Search ROI", cv.WINDOW_NORMAL)
+        roi = selectROI("创建 Search ROI", image, showCrosshair=True, fromCenter=False, rect_color=(255, 255, 0), line_thickness=5)
+        if roi and roi[2] > 0 and roi[3] > 0:
+            x, y, w, h = roi
+            self.config_manager.set_key(f"work_{station}_params", "search_roi", [x, y, w, h])
+            # 在图像上绘制 ROI 范围并更新显示
+            display_image = cv.cvtColor(image.copy(), cv.COLOR_GRAY2BGR) if len(image.shape) == 2 else image.copy()
+            cv.putText(display_image, f"Search ROI", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+            cv.rectangle(display_image, (x, y), (x + w, y + h), (255, 255, 0), 5)
+            self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), display_image)
+            QMessageBox.information(self, "提示", f"Search ROI 已保存 ✅\n区域: ({x}, {y}) 宽{w} 高{h}")
+        else:
+            QMessageBox.information(self, "提示", "已取消创建 Search ROI")
 
 
 
