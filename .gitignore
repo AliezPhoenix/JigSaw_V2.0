@@ -12,3 +12,7 @@ __pycache__/
 *.pyzwzwz
 *.pyzwzwzw
 *.pyzwzwzwz
+.Image/
+.Log/
+.config/
+.docs/
