@@ -666,6 +666,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         cv.putText(image_result, f"Search ROI", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
         cv.rectangle(image_result, (search_roi[0], search_roi[1]), (search_roi[0] + search_roi[2], search_roi[1] + search_roi[3]), (255, 255, 0), 5)
         self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), image_result)
+    
     def create_search_roi(self, station):
         """使用 selectROI 在当前工位图像上框选 search_roi，并保存到配置"""
         image = self.current_image.get(station)
