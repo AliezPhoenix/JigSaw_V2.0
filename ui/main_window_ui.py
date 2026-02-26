@@ -2032,6 +2032,6 @@ class Ui_MainWindow(object):
         self.actionManual_Control.setText(_translate("MainWindow", "Manual Control"))
         self.actionSettings.setText(_translate("MainWindow", "Settings"))
         self.actionDebug.setText(_translate("MainWindow", "Debug"))
-from tabwidget import TabWidget
+from ui.tabwidget import TabWidget
 from widgets.zoomable_graphics_view import ZoomableGraphicsView
-import icons_rc
+
