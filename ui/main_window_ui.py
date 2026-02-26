@@ -9,6 +9,7 @@
 
 
 from PyQt5 import QtCore, QtGui, QtWidgets
+from widgets.zoomable_graphics_view import ZoomableGraphicsView
 
 
 class Ui_MainWindow(object):
@@ -1650,7 +1651,7 @@ class Ui_MainWindow(object):
         self.groupBox_7.setObjectName("groupBox_7")
         self.horizontalLayout_fulltray_image = QtWidgets.QHBoxLayout(self.groupBox_7)
         self.horizontalLayout_fulltray_image.setObjectName("horizontalLayout_fulltray_image")
-        self.graphicsView_fulltray_cam_live = QtWidgets.QGraphicsView(self.groupBox_7)
+        self.graphicsView_fulltray_cam_live = ZoomableGraphicsView(self.groupBox_7)
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
         sizePolicy.setHorizontalStretch(0)
         sizePolicy.setVerticalStretch(0)
@@ -2031,29 +2032,6 @@ class Ui_MainWindow(object):
         self.actionManual_Control.setText(_translate("MainWindow", "Manual Control"))
         self.actionSettings.setText(_translate("MainWindow", "Settings"))
         self.actionDebug.setText(_translate("MainWindow", "Debug"))
-class HorizontalTabBar(QtWidgets.QTabBar):
-    def paintEvent(self, event):
-
-        painter = QtWidgets.QStylePainter(self)
-        try:
-            option = QtWidgets.QStyleOptionTab()
-            for index in range(self.count()):
-                self.initStyleOption(option, index)
-                painter.drawControl(QtWidgets.QStyle.CE_TabBarTabShape, option)
-                painter.drawText(self.tabRect(index),
-                                 QtCore.Qt.AlignCenter | QtCore.Qt.TextDontClip,
-                                 self.tabText(index))
-        finally:
-            painter.end()
-
-    def tabSizeHint(self, index):
-        size = QtWidgets.QTabBar.tabSizeHint(self, index)
-        if size.width() < size.height():
-            size.transpose()
-        return size
-
-
-class TabWidget(QtWidgets.QTabWidget):
-    def __init__(self, parent=None):
-        QtWidgets.QTabWidget.__init__(self, parent)
-        self.setTabBar(HorizontalTabBar())
+from tabwidget import TabWidget
+from widgets.zoomable_graphics_view import ZoomableGraphicsView
+import icons_rc

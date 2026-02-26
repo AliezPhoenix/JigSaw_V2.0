@@ -12,11 +12,15 @@ import TransferPramasSetDialog
 from src.threads.thread_manager import ThreadManager
 from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import QFile, Qt
-from PyQt5.QtWidgets import QLabel,QApplication
+from PyQt5.QtWidgets import QLabel, QApplication, QGraphicsScene
 import numpy as np
-from src.support.support_funs import selectROI, execute_product_detection, draw_detection_results
+from src.support.support_funs import selectROI, execute_product_detection, draw_detection_results, fulltray_load_model, fulltray_predict_single_image
+from src.threads.dry_thread import DryThread
+from src.threads.transfer_thread import TransferThread
 from ImageViewerWidget import ImageViewerWidget
 from LogViewerWidget import LogViewerWidget
+import traceback
+import torch
 class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
     def __init__(self):
         super().__init__()
@@ -123,14 +127,46 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.pushButton_create_checkable_roi_dry.clicked.connect(lambda: self.create_search_roi("dry"))
         self.pushButton_create_checkable_roi_transfer.clicked.connect(lambda: self.create_search_roi("transfer"))
         # self.pushButton_fulltray_save.clicked.connect(self.save_fulltray_params)
-        # self.pushButton_fulltray_select_model.clicked.connect(self.select_fulltray_model)
-        # self.pushButton_fulltray_set_roi.clicked.connect(self.create_fulltray_grid_roi)
-        # self.pushButton_fulltray_select_image.clicked.connect(self.select_fulltray_test_image)
-        # self.pushButton_fulltray_test.clicked.connect(self.manual_test_fulltray)
+        self.pushButton_fulltray_select_model.clicked.connect(self.select_fulltray_model)
+        self.pushButton_fulltray_set_roi.clicked.connect(lambda: self.create_search_roi("fulltray"))
+        self.pushButton_fulltray_select_image.clicked.connect(lambda: self.load_current_image("fulltray"))
+        self.pushButton_fulltray_test.clicked.connect(self.manual_test_fulltray)
         # self.pushButton_product_prams_load.clicked.connect(self._load_config_file())
     
     def _all_signal_connect(self):
-        pass
+        """连接各线程信号到 _update_display 及统计/消息占位"""
+        t = getattr(self, "thread_manager", None)
+        if t is None:
+            return
+        # fulltray_thread: 发射 np.ndarray，由 _update_display 统一处理；结果由 _update_fulltray_result 处理
+        ft = t.get_thread_obj("fulltray_thread")
+        if ft:
+            ft._update_image_signal.connect(lambda img: self._update_display("fulltray", img, None))
+            ft._update_result_signal.connect(self._update_fulltray_result)
+        # dry_thread: 发射 (np.ndarray, Bga_Strip|None)，第二参数为 None 表示实时图
+        dt = t.get_thread_obj("dry_thread")
+        if dt:
+            dt._update_image_signal.connect(lambda img, bga: self._update_display("dry", img, bga))
+            dt._update_statistics_signal.connect(lambda stats: self._update_statistics("dry", stats))
+            dt._update_message_signal.connect(lambda msg: self._update_message("dry", msg))
+        # transfer_thread
+        tt = t.get_thread_obj("transfer_thread")
+        if tt:
+            tt._update_image_signal.connect(lambda img, bga: self._update_display("transfer", img, bga))
+            tt._update_statistics_signal.connect(lambda stats: self._update_statistics("transfer", stats))
+            tt._update_message_signal.connect(lambda msg: self._update_message("transfer", msg))
+        # sucker_thread_1
+        s1 = t.get_thread_obj("sucker_thread_1")
+        if s1:
+            s1._update_image_signal.connect(lambda img, bga: self._update_display("sucker_1", img, bga))
+            s1._update_statistics_signal.connect(lambda stats: self._update_statistics("sucker_1", stats))
+            s1._update_message_signal.connect(lambda msg: self._update_message("sucker_1", msg))
+        # sucker_thread_2
+        s2 = t.get_thread_obj("sucker_thread_2")
+        if s2:
+            s2._update_image_signal.connect(lambda img, bga: self._update_display("sucker_2", img, bga))
+            s2._update_statistics_signal.connect(lambda stats: self._update_statistics("sucker_2", stats))
+            s2._update_message_signal.connect(lambda msg: self._update_message("sucker_2", msg))
     
     def _devices_connect(self):
         
@@ -188,17 +224,82 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                     # 相机未连接，设置为红色
                     status_lable[cam_alias].setStyleSheet("color: red;")
 
-    def _update_display(self,station,image,animation):
-        if station == "dry":
-            pass
-        if station == "transfer":
-            pass
-        if station == "suker_1":
-            pass
-        if station == "sucker_2":
-            pass
+    def _update_display(self, station, image, animation):
+        """各工位图像显示，统一入口"""
         if station == "fulltray":
-            pass
+            if image is not None and isinstance(image, np.ndarray):
+                try:
+                    self._update_label_from_image(self.label_image_show_fulltray, image)
+                    h, w = image.shape[:2]
+                    bytes_per_line = 3 * w
+                    q_image = QImage(image.tobytes(), w, h, bytes_per_line, QImage.Format_BGR888)
+                    pixmap = QPixmap.fromImage(q_image)
+                    scene = QGraphicsScene()
+                    scene.addPixmap(pixmap)
+                    self.graphicsView_fulltray_cam_live.setScene(scene)
+                    self.graphicsView_fulltray_cam_live.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+                except Exception as e:
+                    print(f"满盘显示错误: {e}")
+        elif station == "dry":
+            if image is not None and isinstance(image, np.ndarray):
+                try:
+                    if animation is None:
+                        self._update_label_from_image(self.label_current_cam_live_dry, image)
+                    else:
+                        self._update_label_from_image(self.label_image_show_dry, image)
+                        anim_img = animation.get_full_animation() if hasattr(animation, "get_full_animation") else (animation if isinstance(animation, np.ndarray) else None)
+                        if anim_img is not None and isinstance(anim_img, np.ndarray):
+                            self._update_label_from_image(self.label_image_show_mapping_1, anim_img)
+                except Exception as e:
+                    print(f"干燥台显示错误: {e}")
+        elif station == "transfer":
+            if image is not None and isinstance(image, np.ndarray):
+                try:
+                    if animation is None:
+                        self._update_label_from_image(self.label_current_cam_live_transfer, image)
+                    else:
+                        self._update_label_from_image(self.label_image_show_transfer, image)
+                        anim_img = animation.get_full_animation() if hasattr(animation, "get_full_animation") else (animation if isinstance(animation, np.ndarray) else None)
+                        if anim_img is not None and isinstance(anim_img, np.ndarray):
+                            self._update_label_from_image(self.label_image_show_mapping_2, anim_img)
+                except Exception as e:
+                    print(f"移栽台显示错误: {e}")
+        elif station == "sucker_1":
+            if image is not None and isinstance(image, np.ndarray):
+                try:
+                    self._update_label_from_image(self.label_sucker1_cam_live, image)
+                except Exception as e:
+                    print(f"吸嘴1显示错误: {e}")
+        elif station == "sucker_2":
+            if image is not None and isinstance(image, np.ndarray):
+                try:
+                    self._update_label_from_image(self.label_sucker2_cam_live, image)
+                except Exception as e:
+                    print(f"吸嘴2显示错误: {e}")
+
+    def _update_fulltray_result(self, is_ok, product_count=0, total_cells=0, empty_count=0, avg_confidence=0.0):
+        """更新满盘检测结果显示"""
+        if hasattr(self, 'label_fulltray_result'):
+            if is_ok:
+                result_text = f"OK\n{product_count}/{total_cells}"
+                self.label_fulltray_result.setText(result_text)
+                self.label_fulltray_result.setStyleSheet(
+                    "color: white; font-weight: bold; font-size: 50pt; "
+                    "background-color: green; padding: 10px; border-radius: 5px;"
+                )
+            else:
+                result_text = f"NG\n{product_count}/{total_cells}"
+                self.label_fulltray_result.setText(result_text)
+                self.label_fulltray_result.setStyleSheet(
+                    "color: white; font-weight: bold; font-size: 50pt; "
+                    "background-color: red; padding: 10px; border-radius: 5px;"
+                )
+
+    def _update_statistics(self, station: str, stats_info: dict):
+        pass
+
+    def _update_message(self, station: str, msg: str):
+        pass
 
     def start_thread(self):
         """
@@ -233,13 +334,16 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 "name": "满盘"
             }
         }
-        self.thread_manager = ThreadManager(
-            thread_list=self.THREAD_INFO_LIST,
-            hardware_manager=self.hardware_manager,
-            modbus_manager=self.modbus_manager,
-            config_manager=self.config_manager,
-            ui=self
-        )
+        # 若尚无 ThreadManager 则创建并连接信号；已存在则复用，避免重复创建和重复连接
+        if self.thread_manager is None:
+            self.thread_manager = ThreadManager(
+                thread_list=self.THREAD_INFO_LIST,
+                hardware_manager=self.hardware_manager,
+                modbus_manager=self.modbus_manager,
+                config_manager=self.config_manager,
+                ui=self
+            )
+            self._all_signal_connect()
         success_count = 0
         failed_threads = []
         
@@ -565,16 +669,148 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         else:
             QMessageBox.warning(self, "错误", "模板创建失败❌")
 
-    def load_current_image(self,station):
-        iamge_path, _ = QFileDialog.getOpenFileName(self, "选择图像", "", "图像文件 (*.bmp)")
-        if not iamge_path:
+    def load_current_image(self, station):
+        image_path, _ = QFileDialog.getOpenFileName(self, "选择图像", "", "图像文件 (*.bmp *.jpg *.png)")
+        if not image_path:
             QMessageBox.warning(self, "错误", "未选择图像❌")
             return
 
-        image = cv.imread(iamge_path)
+        image = cv.imread(image_path)
+        if image is None:
+            QMessageBox.warning(self, "错误", "图像加载失败❌")
+            return
         self.current_image[station] = image
-        self._update_label_from_image(getattr(self,f"label_current_cam_live_{station}"),image)
-            
+        if station == "fulltray":
+            image_bgr = cv.cvtColor(image, cv.COLOR_GRAY2BGR) if len(image.shape) == 2 else image.copy()
+            self._update_label_from_image(self.label_image_show_fulltray, image_bgr)
+            h, w = image_bgr.shape[:2]
+            bytes_per_line = 3 * w
+            q_image = QImage(image_bgr.tobytes(), w, h, bytes_per_line, QImage.Format_BGR888)
+            pixmap = QPixmap.fromImage(q_image)
+            scene = QGraphicsScene()
+            scene.addPixmap(pixmap)
+            self.graphicsView_fulltray_cam_live.setScene(scene)
+            self.graphicsView_fulltray_cam_live.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+        else:
+            self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), image)
+
+    def select_fulltray_model(self):
+        """选择满盘检测模型文件并保存到配置"""
+        model_path, _ = QFileDialog.getOpenFileName(
+            self, "选择满盘检测模型", "", "PyTorch 模型 (*.pth *.pt)"
+        )
+        if not model_path:
+            return
+        if not os.path.exists(model_path):
+            QMessageBox.warning(self, "错误", "模型文件不存在❌")
+            return
+        self.config_manager.set_key("work_fulltray_params", "model_path", model_path)
+        self.lineEdit_fulltray_model_path.setText(model_path)
+        self.label_fulltray_current_model.setText(os.path.basename(model_path))
+        self.label_fulltray_current_model.setStyleSheet("color: green;")
+        # 若线程已创建，更新参数以触发模型重载
+        if self.thread_manager:
+            ft = self.thread_manager.get_thread_obj("fulltray_thread")
+            if ft:
+                params = self.config_manager.get_section("work_fulltray_params")
+                ft.update_params(params)
+        QMessageBox.information(self, "提示", f"模型已选择 ✅\n{model_path}")
+
+    def manual_test_fulltray(self):
+        """手动测试满盘检测，参考 fulltray_thread 的检测方式"""
+        image = self.current_image.get("fulltray")
+        if image is None:
+            QMessageBox.warning(self, "错误", "请先选择当前图像❌")
+            return
+        try:
+            params = self.config_manager.get_section("work_fulltray_params")
+        except KeyError:
+            params = {}
+        model_path = params.get("model_path")
+        if not model_path or not os.path.exists(model_path):
+            QMessageBox.warning(self, "错误", "请先选择有效的模型文件❌")
+            return
+        rows = int(params.get("rows", 8))
+        cols = int(params.get("cols", 16))
+        search_roi = params.get("search_roi", [])
+        search_roi = search_roi if isinstance(search_roi, list) and len(search_roi) >= 4 else None
+        input_size = int(params.get("input_size", 150))
+        try:
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            model = fulltray_load_model(model_path, device=device)
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"模型加载失败: {e}")
+            return
+        try:
+            # 参考 fulltray_thread._detect_fulltray_dl
+            if search_roi is not None and len(search_roi) >= 4:
+                x, y, w, h = int(search_roi[0]), int(search_roi[1]), int(search_roi[2]), int(search_roi[3])
+                roi_image = image[y:y+h, x:x+w]
+            else:
+                roi_image = image.copy()
+            try:
+                roi_gray = cv.cvtColor(roi_image, cv.COLOR_BGR2GRAY)
+            except Exception:
+                roi_gray = roi_image.copy()
+            result_image = cv.cvtColor(roi_gray, cv.COLOR_GRAY2BGR)
+            roi_h, roi_w = roi_gray.shape
+            cell_h = roi_h // rows
+            cell_w = roi_w // cols
+            result_matrix = np.zeros((rows, cols), dtype=bool)
+            confidence_matrix = np.zeros((rows, cols), dtype=float)
+            for i in range(rows):
+                for j in range(cols):
+                    y1 = i * cell_h
+                    x1 = j * cell_w
+                    y2 = (i + 1) * cell_h if i < rows - 1 else roi_h
+                    x2 = (j + 1) * cell_w if j < cols - 1 else roi_w
+                    cell = roi_gray[y1:y2, x1:x2]
+                    try:
+                        prediction, confidence = fulltray_predict_single_image(
+                            model, cell, device=device, input_size=input_size
+                        )
+                        result_matrix[i, j] = (prediction == 1)
+                        confidence_matrix[i, j] = confidence
+                        cell_center_x = (x1 + x2) // 2
+                        cell_center_y = (y1 + y2) // 2
+                        cell_radius = min(cell_w, cell_h) // 4
+                        if prediction == 1:
+                            cv.circle(result_image, (cell_center_x, cell_center_y), cell_radius, (0, 255, 0), 2)
+                        else:
+                            offset = cell_radius
+                            cv.line(result_image, (cell_center_x - offset, cell_center_y - offset),
+                                    (cell_center_x + offset, cell_center_y + offset), (0, 0, 255), 2)
+                            cv.line(result_image, (cell_center_x - offset, cell_center_y + offset),
+                                    (cell_center_x + offset, cell_center_y - offset), (0, 0, 255), 2)
+                    except Exception as e:
+                        print(f"满盘Cell[{i},{j}] 预测失败: {e}")
+                        result_matrix[i, j] = False
+            if search_roi is not None and len(search_roi) >= 4:
+                x, y, w, h = int(search_roi[0]), int(search_roi[1]), int(search_roi[2]), int(search_roi[3])
+                image_result_full = cv.cvtColor(image, cv.COLOR_GRAY2BGR) if len(image.shape) == 2 else image.copy()
+                image_result_full[y:y+h, x:x+w] = result_image
+                result_image = image_result_full
+            is_ok = np.all(result_matrix)
+            product_count = int(np.sum(result_matrix))
+            total_cells = rows * cols
+            empty_count = total_cells - product_count
+            avg_confidence = float(np.mean(confidence_matrix))
+            # 更新显示
+            display_img = cv.cvtColor(result_image, cv.COLOR_GRAY2BGR) if len(result_image.shape) == 2 else result_image.copy()
+            self._update_label_from_image(self.label_image_show_fulltray, display_img)
+            h, w = display_img.shape[:2]
+            bytes_per_line = 3 * w
+            q_image = QImage(display_img.tobytes(), w, h, bytes_per_line, QImage.Format_BGR888)
+            pixmap = QPixmap.fromImage(q_image)
+            scene = QGraphicsScene()
+            scene.addPixmap(pixmap)
+            self.graphicsView_fulltray_cam_live.setScene(scene)
+            self.graphicsView_fulltray_cam_live.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+            self._update_fulltray_result(is_ok, product_count, total_cells, empty_count, avg_confidence)
+            QMessageBox.information(self, "提示", f"检测完成: {'OK' if is_ok else 'NG'} | {product_count}/{total_cells} | 置信度 {avg_confidence:.2%}")
+        except Exception as e:
+            QMessageBox.warning(self, "错误", f"满盘检测失败: {e}")
+            traceback.print_exc()
 
     def _get_detectors_for_station(self, station):
         """根据工位参数创建临时检测器"""
@@ -584,8 +820,6 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         except KeyError:
             params = {}
 
-        from src.threads.dry_thread import DryThread
-        from src.threads.transfer_thread import TransferThread
         thread_class = DryThread if station == "dry" else TransferThread
         temp = thread_class(params=params, HM=self.hardware_manager, MM=self.modbus_manager, ui=self)
         return {
@@ -668,7 +902,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), image_result)
     
     def create_search_roi(self, station):
-        """使用 selectROI 在当前工位图像上框选 search_roi，并保存到配置"""
+        """使用 selectROI 在当前工位图像上框选 search_roi，并保存到配置。dry/transfer/fulltray 均使用 search_roi"""
         image = self.current_image.get(station)
         if image is None:
             QMessageBox.warning(self, "错误", "请先选择当前图像❌")
@@ -681,9 +915,20 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             self.config_manager.set_key(f"work_{station}_params", "search_roi", [x, y, w, h])
             # 在图像上绘制 ROI 范围并更新显示
             display_image = cv.cvtColor(image.copy(), cv.COLOR_GRAY2BGR) if len(image.shape) == 2 else image.copy()
-            cv.putText(display_image, f"Search ROI", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+            cv.putText(display_image, "Search ROI", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
             cv.rectangle(display_image, (x, y), (x + w, y + h), (255, 255, 0), 5)
-            self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), display_image)
+            if station == "fulltray":
+                self._update_label_from_image(self.label_image_show_fulltray, display_image)
+                h, w = display_image.shape[:2]
+                bytes_per_line = 3 * w
+                q_image = QImage(display_image.tobytes(), w, h, bytes_per_line, QImage.Format_BGR888)
+                pixmap = QPixmap.fromImage(q_image)
+                scene = QGraphicsScene()
+                scene.addPixmap(pixmap)
+                self.graphicsView_fulltray_cam_live.setScene(scene)
+                self.graphicsView_fulltray_cam_live.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+            else:
+                self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), display_image)
             QMessageBox.information(self, "提示", f"Search ROI 已保存 ✅\n区域: ({x}, {y}) 宽{w} 高{h}")
         else:
             QMessageBox.information(self, "提示", "已取消创建 Search ROI")

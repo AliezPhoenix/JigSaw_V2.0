@@ -340,7 +340,6 @@ class TransferThread(QThread):
                     if not ret:
                         self._update_message_signal.emit(f"采集图像失败: {msg}")
                         continue
-                    image_live = cv.rotate(image_live, cv.ROTATE_90_CLOCKWISE)
                     image_live_bgr = cv.cvtColor(image_live.copy(), cv.COLOR_GRAY2BGR)
                     self._update_image_signal.emit(image_live_bgr,None)
             else:
@@ -392,21 +391,6 @@ class TransferThread(QThread):
         
         # 绘制检测结果
         product_info["product_image_result"] = self.draw_detection_results(product_image, product_info)
-        
-        # 转换defect_type格式：从通用函数的格式转换为transfer_thread期望的格式
-        # 通用函数返回格式：["OK"] 或 ["NG", "具体缺陷类型"]
-        # transfer_thread期望格式：与原始代码一致
-        # 原始代码：如果defect_type是["None"]，转换为"OK"（字符串）；否则保持列表格式
-        if product_info["defect_type"] == ["OK"]:
-            # 转换为字符串"OK"（与原始代码一致）
-            product_info["defect_type"] = "OK"
-        elif len(product_info["defect_type"]) > 0 and product_info["defect_type"][0] == "NG":
-            # 移除"NG"，保留具体缺陷类型列表
-            if len(product_info["defect_type"]) > 1:
-                product_info["defect_type"] = product_info["defect_type"][1:]
-            else:
-                # 只有"NG"没有具体类型，保持列表格式（这种情况不应该发生）
-                product_info["defect_type"] = ["NG"]
         
         return True, "成功", product_info
 

@@ -3222,7 +3222,7 @@
           </property>
           <layout class="QHBoxLayout" name="horizontalLayout_fulltray_image">
            <item>
-            <widget class="QGraphicsView" name="graphicsView_fulltray_cam_live">
+            <widget class="ZoomableGraphicsView" name="graphicsView_fulltray_cam_live">
              <property name="sizePolicy">
               <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
                <horstretch>0</horstretch>
@@ -3594,6 +3594,11 @@
    <extends>QTabWidget</extends>
    <header>tabwidget.h</header>
    <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>ZoomableGraphicsView</class>
+   <extends>QGraphicsView</extends>
+   <header>widgets.zoomable_graphics_view</header>
   </customwidget>
  </customwidgets>
  <resources>

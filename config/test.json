@@ -124,7 +124,7 @@
     "rows": 8,
     "cols": 16,
     "empty_tray_template_path": null,
-    "grid_roi": [
+    "search_roi": [
       12,
       530,
       2365,
