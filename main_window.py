@@ -999,7 +999,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "scratch_check_enable": params.get("scratch_check_enable", True),
             "allow_mark": params.get("allow_mark", False),
         }
-
+        print(detect_params)
         for x, y in template_pos_list:
             if x + template_w > img_w or y + template_h > img_h:
                 continue

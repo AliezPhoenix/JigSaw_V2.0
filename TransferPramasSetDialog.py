@@ -10,7 +10,7 @@ from src.detectors.size_detector import SizeDetector
 from src.detectors.shift_detector import ShiftDetector
 from src.detectors.scratch_detector import ScratchDetector
 from src.config.config_manager import ConfigManager
-from src.support.support_funs import selectROI, draw_detection_results
+from src.support.support_funs import selectROI, draw_detection_results, execute_product_detection
 
 class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
     def __init__(self, config_manager:'ConfigManager', parent=None):
@@ -277,140 +277,6 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
         
         self.processed_image_label.setPixmap(scaled_pixmap)
     
-    def _execute_detections(self, image, detect_type=None):
-        """执行所有检测（按照dry_thread.py的_detect_product方式）
-        
-        Args:
-            image: 输入的图像（灰度图或BGR图）
-            detect_type: 检测类型，可以是 "size", "ball", "mark", "scratch", "shift" 或 None（全部检测）
-        Returns:
-            product_info: dict 产品信息字典，包含：
-                - defect_type: list 缺陷类型列表，如 ["OK"] 或 ["NG", "Mark"]
-                - product_image_result: np.ndarray 产品图像结果
-                - size_result: tuple 尺寸检测结果元组 (success, msg, result_dict) 或 None
-                - ball_result: tuple 锡球检测结果元组 (success, msg, result_dict) 或 None
-                - mark_result: tuple Mark检测结果元组 (success, msg, result_dict) 或 None
-                - shift_result: tuple 偏移检测结果元组 (success, msg, result_dict) 或 None
-                - scratch_result: tuple 划痕检测结果元组 (success, msg, result_dict) 或 None
-        """
-        mark_check_enable = True if detect_type is None or detect_type == "mark" or detect_type == "all" else False
-        size_check_enable = True if detect_type is None or detect_type == "size" or detect_type == "all" else False
-        ball_check_enable = True if detect_type is None or detect_type == "ball" or detect_type == "all" else False
-        shift_check_enable = True if detect_type is None or detect_type == "shift" or detect_type == "all" else False
-        scratch_check_enable = True if detect_type is None or detect_type == "scratch" or detect_type == "all" else False
-        debug = False
-        if debug:
-            print(f"mark_check_enable: {mark_check_enable}, size_check_enable: {size_check_enable}, ball_check_enable: {ball_check_enable}, shift_check_enable: {shift_check_enable}, scratch_check_enable: {scratch_check_enable}")
-        # 初始化结果字典
-        product_info = {
-            "defect_type": ["OK"],
-            "product_image_result": None,
-            "size_result": None,
-            "ball_result": None,
-            "mark_result": None,
-            "shift_result": None,
-            "scratch_result": None,
-        }
-        
-        # Mark检测
-        if mark_check_enable:
-            mark_detect_result = self.mark_detector.detect(image)
-            if mark_detect_result[0]:  # success
-                product_info["mark_result"] = mark_detect_result
-                # 关键差异：检测到Mark判定为OK，未检测到Mark判定为NG
-                if not mark_detect_result[2]["is_valid"]:
-                    # 未检测到Mark，判定为NG
-                    if "OK" in product_info["defect_type"]:
-                        product_info["defect_type"].remove("OK")
-                    product_info["defect_type"].append("Mark")
-            else:
-                QMessageBox.warning(self, "警告", f"mark检测失败: {mark_detect_result[1]}")
-            if debug:
-                print(f"mark_detect_result: {mark_detect_result}")
-        
-        
-        # 尺寸检测
-        if size_check_enable:
-            size_detect_result = self.size_detector.detect(image)
-            if size_detect_result[0]:  # success
-                product_info["size_result"] = size_detect_result
-                if not size_detect_result[2]["is_valid"]:
-                    # 尺寸不合格，判定为NG
-                    if "OK" in product_info["defect_type"]:
-                        product_info["defect_type"].remove("OK")
-                    product_info["defect_type"].append("Size")
-            else:
-                QMessageBox.warning(self, "警告", f"size检测失败: {size_detect_result[1]}")
-            if debug:
-                print(f"size_detect_result: {size_detect_result}")
-        
-        
-        # 锡球检测
-        if ball_check_enable:
-            ball_detect_result = self.ball_detector.detect(image)
-            if ball_detect_result[0]:  # success
-                product_info["ball_result"] = ball_detect_result
-                if not ball_detect_result[2]["is_valid"]:
-                    # 锡球不合格，判定为NG
-                    if "OK" in product_info["defect_type"]:
-                        product_info["defect_type"].remove("OK")
-                    # 判断是数量问题还是质量问题
-                    expected_count = self.local_params.get("ball_count", 0)
-                    if ball_detect_result[2].get("ball_count", 0) != expected_count:
-                        product_info["defect_type"].append("Ball Count")
-                    else:
-                        product_info["defect_type"].append("Ball")
-            else:
-                QMessageBox.warning(self, "警告", f"ball检测失败: {ball_detect_result[1]}")
-            if debug:
-                print(f"ball_detect_result: {ball_detect_result}")
-        
-        
-        # 偏移检测（需要ball_result和size_result）
-        if shift_check_enable and product_info["ball_result"] is not None and product_info["size_result"] is not None:
-            # shift_detector.detect()期望接收dict参数，从tuple中提取result_dict
-            ball_result_dict = product_info["ball_result"][2]
-            size_result_dict = product_info["size_result"][2]
-            shift_detect_result = self.shift_detector.detect(ball_result_dict, size_result_dict)
-            
-            if shift_detect_result[0]:  # success
-                product_info["shift_result"] = shift_detect_result
-                if not shift_detect_result[2]["is_valid"]:
-                    if "OK" in product_info["defect_type"]:
-                        product_info["defect_type"].remove("OK")
-                    product_info["defect_type"].append("Shift")
-            else:
-                QMessageBox.warning(self, "警告", f"shift检测失败: {shift_detect_result[1]}")
-            if debug:
-                print(f"shift_detect_result: {shift_detect_result}")
-        
-        
-        # 划痕检测
-        if scratch_check_enable:
-            scratch_detect_result = self.scratch_detector.detect(image)
-            if scratch_detect_result[0]:  # success
-                product_info["scratch_result"] = scratch_detect_result
-                if not scratch_detect_result[2]["is_valid"]:
-                    # 划痕不合格，判定为NG
-                    if "OK" in product_info["defect_type"]:
-                        product_info["defect_type"].remove("OK")
-                    product_info["defect_type"].append("Scratch")
-            else:
-                QMessageBox.warning(self, "警告", f"scratch检测失败: {scratch_detect_result[1]}")
-            if debug:
-                print(f"scratch_detect_result: {scratch_detect_result}")
-        
-        
-        # 更新总体判定
-        if len(product_info["defect_type"]) > 1:
-            product_info["defect_type"][0] = "NG"
-        
-        # 生成产品图像结果（用于显示）
-        # 注意：这里使用原始图像，绘制会在run_template_test中进行
-        product_info["product_image_result"] = image.copy()
-        
-        return product_info
-
     def _draw_detection_results(self, image_result: np.ndarray, product_info: dict):
         """在图像上绘制检测结果（调用通用方法）
         
@@ -631,8 +497,40 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
             else:
                 template_gray = self.template_image
             
-            # 执行所有检测（按照dry_thread.py的方式）
-            product_info = self._execute_detections(template_gray, detect_type)
+            # 构建检测器字典（与 main_window.template_validity_test 一致）
+            detectors = {
+                "ball_detector": self.ball_detector,
+                "size_detector": self.size_detector,
+                "mark_detector": self.mark_detector,
+                "shift_detector": self.shift_detector,
+                "scratch_detector": self.scratch_detector,
+            }
+
+            # 检测开关统一从 local_params 获取（移栽台 allow_mark 通常为 True）
+            detect_params = {
+                "mark_check_enable": self.local_params.get("mark_check_enable", True),
+                "size_check_enable": self.local_params.get("size_check_enable", True),
+                "ball_check_enable": self.local_params.get("ball_check_enable", True),
+                "shift_check_enable": self.local_params.get("shift_check_enable", True),
+                "scratch_check_enable": self.local_params.get("scratch_check_enable", True),
+                "allow_mark": self.local_params.get("allow_mark", True),
+            }
+
+            # detect_type 为 None 或 "all" 时使用 local_params 的开关；为 ball/size/mark/scratch/shift 时仅执行该检测
+            pass_detect_type = None if (detect_type is None or detect_type == "all") else detect_type
+
+            success, msg, product_info = execute_product_detection(
+                image=template_gray,
+                detectors=detectors,
+                params=detect_params,
+                detect_type=pass_detect_type,
+                early_return_on_ng=False,
+                error_callback=None
+            )
+
+            if not success:
+                QMessageBox.warning(self, "警告", msg)
+                return
             
             # 绘制检测结果
             image_result = self._draw_detection_results(self.template_image, product_info)
