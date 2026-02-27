@@ -11,7 +11,7 @@ import DryPramasSetDialog
 import TransferPramasSetDialog
 from src.threads.thread_manager import ThreadManager
 from PyQt5.QtGui import QPixmap, QImage
-from PyQt5.QtCore import QFile, Qt
+from PyQt5.QtCore import QFile, Qt, QSettings, QTimer
 from PyQt5.QtWidgets import QLabel, QApplication, QGraphicsScene
 import numpy as np
 from src.support.support_funs import selectROI, execute_product_detection, draw_detection_results, fulltray_load_model, fulltray_predict_single_image, Bga_Strip
@@ -94,6 +94,37 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         # 设置tab标题
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.log_viewer_widget), "日志查看")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.image_viewer_widget), "图像查看")
+        
+        # 延迟加载配方，确保窗口显示后 label 已获得正确尺寸，避免图像缩放异常
+        QTimer.singleShot(3000, self._load_last_config)
+    
+    def _get_last_config_path(self):
+        """从 QSettings 读取上次配方路径"""
+        settings = QSettings("JigSaw", "JigSaw_v2")
+        return settings.value("last_config_path", "", type=str)
+    
+    def _save_last_config_path(self, path):
+        """将配方路径写入 QSettings"""
+        if path:
+            settings = QSettings("JigSaw", "JigSaw_v2")
+            settings.setValue("last_config_path", path)
+    
+    def _load_last_config(self):
+        """静默加载上次配方，若路径存在且文件有效则加载"""
+        last_path = self._get_last_config_path()
+        if not last_path or not os.path.exists(last_path):
+            return
+        try:
+            ret, error_message = self.config_manager.load(last_path)
+            if not ret:
+                print(f"自动加载上次配方失败: {error_message}")
+                return
+            self.config_manager.get_section("work_dry_params")
+            self._update_ui_from_config()
+            self.label_13.setText(os.path.basename(last_path))
+        except Exception as e:
+            print(f"自动加载上次配方异常: {e}")
+            traceback.print_exc()
     
     def _all_button_connect(self):
         self.pushButton_start.clicked.connect(self.start_thread)
@@ -510,6 +541,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         if not ret:
             QMessageBox.warning(self, "警告", f"加载配置文件失败: {error_message}❌")
             return
+        self._save_last_config_path(file_path)
         self.label_13.setText(os.path.basename(file_path))
         QMessageBox.information(self, "提示", "配置文件加载成功✅")
 
@@ -526,6 +558,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         if not ret:
             QMessageBox.warning(self, "警告", f"保存配置文件失败: {error_message}❌")
             return
+        self._save_last_config_path(file_path)
         self.label_13.setText(os.path.basename(file_path))
         QMessageBox.information(self, "提示", "配置文件保存成功✅")
 
@@ -766,7 +799,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 # 更新整个tabWidget的布局
                 self.tabWidget.updateGeometry()
                 # 多次处理事件，确保布局计算完成
-                for _ in range(2):
+                for _ in range(10):
                     QApplication.processEvents()
                 # 确保所有子widget的布局都已计算
                 current_widget.update()
