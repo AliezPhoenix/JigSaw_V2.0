@@ -14,7 +14,8 @@ from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import QFile, Qt
 from PyQt5.QtWidgets import QLabel, QApplication, QGraphicsScene
 import numpy as np
-from src.support.support_funs import selectROI, execute_product_detection, draw_detection_results, fulltray_load_model, fulltray_predict_single_image
+from src.support.support_funs import selectROI, execute_product_detection, draw_detection_results, fulltray_load_model, fulltray_predict_single_image, Bga_Strip
+from src.support.InteractiveBgaLabel import InteractiveBgaLabel
 from src.threads.dry_thread import DryThread
 from src.threads.transfer_thread import TransferThread
 from ImageViewerWidget import ImageViewerWidget
@@ -77,6 +78,10 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         }}
         self._devices_connect()
         self._all_button_connect()
+        
+        # 替换 label_mapping_dry 和 label_mapping_transfer 为 InteractiveBgaLabel
+        self._replace_mapping_label("dry")
+        self._replace_mapping_label("transfer")
         
         # 创建日志查看和图像查看tab页面
         self.log_viewer_widget = LogViewerWidget(self)
@@ -224,7 +229,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                     # 相机未连接，设置为红色
                     status_lable[cam_alias].setStyleSheet("color: red;")
 
-    def _update_display(self, station, image, animation):
+    def _update_display(self, station, image, bga_strip:Bga_Strip=None):
         """各工位图像显示，统一入口"""
         if station == "fulltray":
             if image is not None and isinstance(image, np.ndarray):
@@ -243,25 +248,25 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         elif station == "dry":
             if image is not None and isinstance(image, np.ndarray):
                 try:
-                    if animation is None:
+                    if bga_strip is None:
                         self._update_label_from_image(self.label_current_cam_live_dry, image)
+                        self._update_label_from_image(self.label_image_show_dry, image)
                     else:
                         self._update_label_from_image(self.label_image_show_dry, image)
-                        anim_img = animation.get_full_animation() if hasattr(animation, "get_full_animation") else (animation if isinstance(animation, np.ndarray) else None)
-                        if anim_img is not None and isinstance(anim_img, np.ndarray):
-                            self._update_label_from_image(self.label_image_show_mapping_1, anim_img)
+                        self._update_label_from_image(self.label_current_cam_live_dry, image)
+                        self.update_bga_display(bga_strip, bga_strip.side, "dry")
                 except Exception as e:
                     print(f"干燥台显示错误: {e}")
         elif station == "transfer":
             if image is not None and isinstance(image, np.ndarray):
                 try:
-                    if animation is None:
+                    if bga_strip is None:
                         self._update_label_from_image(self.label_current_cam_live_transfer, image)
+                        self._update_label_from_image(self.label_image_show_transfer, image)
                     else:
                         self._update_label_from_image(self.label_image_show_transfer, image)
-                        anim_img = animation.get_full_animation() if hasattr(animation, "get_full_animation") else (animation if isinstance(animation, np.ndarray) else None)
-                        if anim_img is not None and isinstance(anim_img, np.ndarray):
-                            self._update_label_from_image(self.label_image_show_mapping_2, anim_img)
+                        self._update_label_from_image(self.label_current_cam_live_transfer, image)
+                        self.update_bga_display(bga_strip, bga_strip.side, "transfer")
                 except Exception as e:
                     print(f"移栽台显示错误: {e}")
         elif station == "sucker_1":
@@ -516,13 +521,48 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         if not file_path:
             QMessageBox.warning(self, "警告", "未选择配置文件❌")
             return
+        self._update_config_from_ui()
         ret,error_message = self.config_manager.save(file_path)
         if not ret:
             QMessageBox.warning(self, "警告", f"保存配置文件失败: {error_message}❌")
             return
         self.label_13.setText(os.path.basename(file_path))
         QMessageBox.information(self, "提示", "配置文件保存成功✅")
-    
+
+    def _update_config_from_ui(self):
+        """从 UI 读取用户输入参数并保存到 config_manager"""
+        try:
+            size_x = float(self.lineEdit_product_size_x_mm.text())
+            size_y = float(self.lineEdit_product_size_y_mm.text())
+            total_rows = int(self.lineEdit_row_nums.text())
+            total_cols = int(self.lineEdit_col_nums.text())
+            product_count = int(self.lineEdit_product_count.text())
+            product_type = "BGA" if self.radioButton_BGA_type.isChecked() else "QFN"
+
+            for section in ["work_dry_params", "work_transfer_params"]:
+                self.config_manager.set_key(section, "product_size", [size_x, size_y])
+                self.config_manager.set_key(section, "product_type", product_type)
+                self.config_manager.set_key(section, "total_rows", total_rows)
+                self.config_manager.set_key(section, "total_cols", total_cols)
+                self.config_manager.set_key(section, "product_count", product_count)
+
+            self.config_manager.set_key("work_dry_params", "template_threshold", float(self.lineEdit_mathch_threshsold_dry.text()))
+            self.config_manager.set_key("work_dry_params", "current_col", int(self.lineEdit_current_col_dry.text()))
+            self.config_manager.set_key("work_dry_params", "current_row", int(self.lineEdit_current_row_dry.text()))
+            self.config_manager.set_key("work_dry_params", "pixel_size", float(self.lineEdit_pixel_size_dry.text()))
+
+            self.config_manager.set_key("work_transfer_params", "template_threshold", float(self.lineEdit_mathch_threshsold_transfer.text()))
+            self.config_manager.set_key("work_transfer_params", "current_col", int(self.lineEdit_current_col_transfer.text()))
+            self.config_manager.set_key("work_transfer_params", "current_row", int(self.lineEdit_current_row_transfer.text()))
+            self.config_manager.set_key("work_transfer_params", "pixel_size", float(self.lineEdit_pixel_size_transfer.text()))
+
+            self.config_manager.set_key("work_fulltray_params", "rows", int(self.lineEdit_fulltray_row_nums.text()))
+            self.config_manager.set_key("work_fulltray_params", "cols", int(self.lineEdit_fulltray_col_nums.text()))
+            self.config_manager.set_key("work_fulltray_params", "model_path", self.lineEdit_fulltray_model_path.text().strip())
+        except (ValueError, AttributeError) as e:
+            print(f"_update_config_from_ui 解析错误: {e}")
+            raise
+
     def _update_ui_from_config(self):
 
         #————————————————————主界面参数上传——————————————————————————————————————————————————
@@ -570,6 +610,24 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.lineEdit_fulltray_model_path.setText(model_path)
         self.label_fulltray_current_model.setText(model_name)
         self.label_fulltray_current_model.setStyleSheet("color: green;")
+
+        #——————————————————————————加载配置时显示初始 BGA mapping
+        try:
+            dry_params = self.config_manager.get_section("work_dry_params")
+            dry_total_rows = dry_params.get("total_rows", 0)
+            dry_total_cols = dry_params.get("total_cols", 0)
+            if dry_total_rows > 0 and dry_total_cols > 0:
+                bga_dry_front = Bga_Strip(strip_side="front", strip_lot="", strip_sn="", strip_create_time="", params=dry_params)
+                self.update_bga_display(bga_dry_front, "front", "dry")
+            transfer_params = self.config_manager.get_section("work_transfer_params")
+            transfer_total_rows = transfer_params.get("total_rows", 0)
+            transfer_total_cols = transfer_params.get("total_cols", 0)
+            if transfer_total_rows > 0 and transfer_total_cols > 0:
+                bga_transfer_front = Bga_Strip(strip_side="front", strip_lot="", strip_sn="", strip_create_time="", params=transfer_params)
+                self.update_bga_display(bga_transfer_front, "front", "transfer")
+        except Exception as e:
+            print(f"显示基础mapping图像失败: {str(e)}")
+            traceback.print_exc()
              
     def _load_template(self,station):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -589,6 +647,11 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         QMessageBox.information(self,"提示","模板已成功加载✅")
          
     def confirm_params(self,station):
+        self._update_config_from_ui()
+        self._update_ui_from_config()
+        if self.thread_manager is None:
+            return
+        
         if station == "all":
             success_list =[]
             for sub_station in ["dry_thread","transfer_thread","sucker1_therad","sucker2_thread","fulltray_thread"]:
@@ -626,6 +689,68 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                                       Qt.KeepAspectRatio, Qt.SmoothTransformation)
         label.setScaledContents(False)
         label.setPixmap(scaled_pixmap)
+
+    def _replace_mapping_label(self, work_position):
+        """替换 label_mapping_dry 或 label_mapping_transfer 为 InteractiveBgaLabel"""
+        attr_name = f"label_mapping_{work_position}"
+        old_label = getattr(self, attr_name)
+        parent = old_label.parent()
+        layout = parent.layout()
+        index = layout.indexOf(old_label)
+        new_label = InteractiveBgaLabel(parent)
+        new_label.setAlignment(Qt.AlignCenter)
+        new_label.setObjectName(attr_name)
+        new_label.regionClicked.connect(lambda pos, wp=work_position: self.on_bga_region_clicked(pos, wp))
+        layout.takeAt(index).widget().deleteLater()
+        layout.insertWidget(index, new_label)
+        setattr(self, attr_name, new_label)
+
+    def update_bga_display(self, bga_instance, side, work_position="dry"):
+        """
+        更新BGA显示（在主线程中调用）
+        参数:
+            bga_instance: Bga_Strip 实例
+            side: "front" 或 "back"
+            work_position: "dry" 或 "transfer"，用于确定更新哪个 label
+        """
+        try:
+            if work_position == "dry":
+                label = self.label_mapping_dry
+                label_mapping_show = self.label_image_show_mapping_1
+            else:
+                label = self.label_mapping_transfer
+                label_mapping_show = self.label_image_show_mapping_2
+
+            label.set_bga_data(bga_instance)
+            animation = bga_instance.get_full_animation()
+            self._update_label_from_image(label_mapping_show, animation)
+        except Exception as e:
+            print(f"更新BGA显示失败 ({work_position}): {str(e)}")
+            traceback.print_exc()
+
+    def on_bga_region_clicked(self, pos_start, work_position="dry"):
+        """BGA区域点击回调，显示对应区域的图像"""
+        try:
+            if work_position == "dry":
+                bga_instance = getattr(self.label_mapping_dry, 'bga', None)
+            else:
+                bga_instance = getattr(self.label_mapping_transfer, 'bga', None)
+            if bga_instance is None:
+                return
+            current_image = bga_instance.get_pos_image(pos_start)
+            if current_image is not None:
+                label_name = getattr(self, f"label_current_cam_live_{work_position}")
+                if current_image.dtype != np.uint8:
+                    if np.issubdtype(current_image.dtype, np.floating) and current_image.max() <= 1.0:
+                        current_image = (np.clip(current_image, 0, 1) * 255).astype(np.uint8)
+                    else:
+                        current_image = np.clip(current_image, 0, 255).astype(np.uint8)
+                if len(current_image.shape) == 2:
+                    current_image = cv.cvtColor(current_image, cv.COLOR_GRAY2BGR)
+                self._update_label_from_image(label_name, current_image)
+        except Exception as e:
+            print(f"BGA区域点击显示错误 ({work_position}): {str(e)}")
+            traceback.print_exc()
 
     def _init_all_tabs(self):
         tab_count = self.tabWidget.count()

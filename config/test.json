@@ -110,14 +110,16 @@
     "product_size": [
       0.0,
       0.0
-    ]
+    ],
+    "pixel_size": 0.008823
   },
   "work_sucker2_params": {
     "product_type": null,
     "product_size": [
       0.0,
       0.0
-    ]
+    ],
+    "pixel_size": 0.008823
   },
   "work_fulltray_params": {
     "product_type": "BGA",
