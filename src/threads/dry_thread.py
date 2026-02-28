@@ -326,9 +326,6 @@ class DryThread(QThread):
                     log_info = self.bga_strip.get_log_info()
 
                     success = self._write_modbus_registers(send_data, mode)
-                    print(success)
-                    print(len(send_data))
-                    print(send_data)
                     self.write_log_to_file(log_info)
                 
                 success,msg = self.MM.write(alias="dry_modbus",address = 0,value_list=[1],function_code=cst.WRITE_SINGLE_COIL)
@@ -339,7 +336,6 @@ class DryThread(QThread):
                 self.MM.write(alias="dry_modbus",address = 2,value_list=[0],function_code=cst.WRITE_SINGLE_COIL)
             trigger_camera_last = trigger_camera
             trigger_finished_last = trigger_finished
-            print(trigger_camera,trigger_camera_last,trigger_finished,trigger_finished_last)
             #————————————————————————实时显示画面————————————————————
             if self.ui.radioButton_live_dry.isChecked():
                 #——————————————————只有在没有处理触发信号时才更新实时显示，避免重复采集图像————————————————————————————————————
