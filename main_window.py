@@ -34,11 +34,11 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "fulltray": None
         }
         self.CAM_LIST=[
-            {"alias": "dry_cam",        "port_ip": "192.168.1.7", "device_ip": "192.168.1.200"},
-            {"alias": "transfer_cam",   "port_ip": "192.168.1.8", "device_ip": "192.168.1.201"},
-            {"alias": "sucker1_cam",          "port_ip": "192.168.1.9", "device_ip": "192.168.1.202"},
-            {"alias": "sucker2_cam",          "port_ip": "192.168.1.10", "device_ip": "192.168.1.203"},
-            {"alias": "fulltray_cam",          "port_ip": "192.168.1.6", "device_ip": "192.168.1.204"}
+            {"alias": "dry_cam",        "port_ip": "192.168.1.200", "device_ip": "192.168.1.7"},
+            {"alias": "transfer_cam",   "port_ip": "192.168.1.201", "device_ip": "192.168.1.8"},
+            {"alias": "sucker1_cam",          "port_ip": "192.168.1.202", "device_ip": "192.168.1.9"},
+            {"alias": "sucker2_cam",          "port_ip": "192.168.1.203", "device_ip": "192.168.1.10"},
+            {"alias": "fulltray_cam",          "port_ip": "192.168.1.204", "device_ip": "192.168.1.6"}
         ] 
 
         self.MODBUS_INFO_LIST=[
@@ -781,6 +781,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 if len(current_image.shape) == 2:
                     current_image = cv.cvtColor(current_image, cv.COLOR_GRAY2BGR)
                 self._update_label_from_image(label_name, current_image)
+                self.current_image[work_position] = current_image
         except Exception as e:
             print(f"BGA区域点击显示错误 ({work_position}): {str(e)}")
             traceback.print_exc()
