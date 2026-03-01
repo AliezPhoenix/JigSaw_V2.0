@@ -16,8 +16,12 @@ from PyQt5.QtWidgets import QLabel, QApplication, QGraphicsScene
 import numpy as np
 from src.support.support_funs import selectROI, execute_product_detection, draw_detection_results, fulltray_load_model, fulltray_predict_single_image, Bga_Strip
 from src.support.InteractiveBgaLabel import InteractiveBgaLabel
-from src.threads.dry_thread import DryThread
-from src.threads.transfer_thread import TransferThread
+from src.detectors.ball_detector import BallDetector
+from src.detectors.size_detector import SizeDetector
+from src.detectors.mark_detector import MarkDetector
+from src.detectors.shift_detector import ShiftDetector
+from src.detectors.scratch_detector import ScratchDetector
+from src.detectors.template_detector import TemplateDetector
 from ImageViewerWidget import ImageViewerWidget
 from LogViewerWidget import LogViewerWidget
 import traceback
@@ -97,6 +101,12 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         
         # 延迟加载配方，确保窗口显示后 label 已获得正确尺寸，避免图像缩放异常
         QTimer.singleShot(3000, self._load_last_config)
+
+        self.label_main_running_status.setText("待机")
+        self.label_main_running_status.setStyleSheet(
+            "color: orange ; font-weight: bold; font-size: 20pt; "
+            "background-color: yellow; padding: 10px; border-radius: 5px;"
+        )
     
     def _get_last_config_path(self):
         """从 QSettings 读取上次配方路径"""
@@ -148,8 +158,8 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.pushButton_product_prams_save.clicked.connect(self._save_config_file)
 
         self.pushButton_confirm_params_all.clicked.connect(lambda: self.confirm_params("all"))
-        self.pushButton_confirm_params_dry.clicked.connect(lambda: self.confirm_params("dry"))
-        self.pushButton_confirm_params_transfer.clicked.connect(lambda: self.confirm_params("transfer"))
+        self.pushButton_confirm_params_dry.clicked.connect(lambda: self.confirm_params("dry_thread"))
+        self.pushButton_confirm_params_transfer.clicked.connect(lambda: self.confirm_params("transfer_thread"))
 
         self.PushButton_test_tempalte.clicked.connect(lambda:self.show_pramas_set_dialog("dry"))
         self.PushButton_transfer_test_template.clicked.connect(lambda:self.show_pramas_set_dialog("transfer"))
@@ -424,6 +434,11 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         # 打印结果摘要
         if success_count > 0:
             print(f"成功启动 {success_count} 个线程")
+            self.label_main_running_status.setText("运行中")
+            self.label_main_running_status.setStyleSheet(
+                "color: white ; font-weight: bold; font-size: 20pt; "
+                "background-color: green;"
+            )
         if failed_threads:
             print("以下线程启动失败:")
             for failed_msg in failed_threads:
@@ -435,6 +450,11 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         """停止所有线程"""
         self.thread_manager.stop_all_threads()
         print("所有线程已停止")
+        self.label_main_running_status.setText("待机")
+        self.label_main_running_status.setStyleSheet(
+            "color: orange ; font-weight: bold; font-size: 20pt; "
+            "background-color: yellow; padding: 10px; border-radius: 5px;"
+        )
 
     def _pause_thread(self):
         pass
@@ -971,24 +991,6 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             QMessageBox.warning(self, "错误", f"满盘检测失败: {e}")
             traceback.print_exc()
 
-    def _get_detectors_for_station(self, station):
-        """根据工位参数创建临时检测器"""
-        params_section = "work_dry_params" if station == "dry" else "work_transfer_params"
-        try:
-            params = self.config_manager.get_section(params_section)
-        except KeyError:
-            params = {}
-
-        thread_class = DryThread if station == "dry" else TransferThread
-        temp = thread_class(params=params, HM=self.hardware_manager, MM=self.modbus_manager, ui=self)
-        return {
-            "ball_detector": temp.ball_detector,
-            "size_detector": temp.size_detector,
-            "mark_detector": temp.mark_detector,
-            "shift_detector": temp.shift_detector,
-            "scratch_detector": temp.scratch_detector,
-        }, temp.template_detector, params
-
     def template_validity_test(self, station):
         """
         1. template_detector 定位产品
@@ -1001,7 +1003,78 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             QMessageBox.warning(self, "错误", "请先选择当前图像❌")
             return
 
-        detectors, template_detector, params = self._get_detectors_for_station(station)
+        # 根据 config 直接创建临时检测器
+        params_section = "work_dry_params" if station == "dry" else "work_transfer_params"
+        try:
+            params = self.config_manager.get_section(params_section)
+        except KeyError:
+            params = {}
+
+        pixel_size = params.get("pixel_size", 0.008823)
+        product_size = params.get("product_size", [10.0, 15.0])
+
+        ball_detector = BallDetector()
+        ball_detector.update_params({
+            "min_threshold": params.get("min_threshold_ball", 0),
+            "max_threshold": params.get("max_threshold_ball", 255),
+            "ball_area_max_threshold": params.get("ball_area_max_threshold", 1500),
+            "ball_area_min_threshold": params.get("ball_area_min_threshold", 500),
+            "ball_radius_tolerance": params.get("ball_radius_tolerance", 0.05),
+            "std_radius": params.get("std_radius", 0.17),
+            "expected_ball_count": params.get("ball_count", 0),
+            "ball_search_roi": params.get("ball_search_roi", []),
+            "pixel_size": pixel_size,
+        })
+        size_detector = SizeDetector()
+        size_detector.update_params({
+            "min_threshold": params.get("min_threshold_size", 0),
+            "max_threshold": params.get("max_threshold_size", 255),
+            "allow_tolerance_x": params.get("product_size_tolerance_x", 0.1),
+            "allow_tolerance_y": params.get("product_size_tolerance_y", 0.1),
+            "roi_width": 80,
+            "std_size": product_size,
+            "pixel_size": pixel_size,
+        })
+        mark_detector = MarkDetector()
+        mark_detector.update_params({
+            "min_threshold": params.get("min_threshold_mark", 0),
+            "max_threshold": params.get("max_threshold_mark", 255),
+            "min_mark_area": params.get("min_mark_area", 2000),
+            "pixel_size": pixel_size,
+            "mark_detect_mode": params.get("mark_detect_mode", "manual"),
+            "mark_roi": params.get("mark_roi", []),
+        })
+        shift_detector = ShiftDetector()
+        shift_detector.update_params({
+            "pixel_size": pixel_size,
+            "error_correction_factor": 0.7,
+            "allow_tolerance_x": params.get("shift_x_tolerance", 0.05),
+            "allow_tolerance_y": params.get("shift_y_tolerance", 0.05),
+        })
+        scratch_detector = ScratchDetector()
+        scratch_detector.update_params({
+            "min_threshold": params.get("min_threshold_scratch", 0),
+            "max_threshold": params.get("max_threshold_scratch", 255),
+            "scratch_length_threshold": params.get("scratch_length", 5.0),
+            "pixel_size": pixel_size,
+            "scratch_roi": params.get("scratch_roi", []),
+            "roi_blocks": params.get("roi_block", []),
+        })
+        template_detector = TemplateDetector()
+        search_roi = params.get("search_roi") or []
+        template_detector.update_params({
+            "template_threshold": params.get("template_threshold", 0.7),
+            "search_roi": search_roi,
+        })
+
+        detectors = {
+            "ball_detector": ball_detector,
+            "size_detector": size_detector,
+            "mark_detector": mark_detector,
+            "shift_detector": shift_detector,
+            "scratch_detector": scratch_detector,
+        }
+
         template_path = params.get("golden_template_path")
         if not template_path or not os.path.exists(template_path):
             QMessageBox.warning(self, "错误", "模板路径无效或文件不存在❌")

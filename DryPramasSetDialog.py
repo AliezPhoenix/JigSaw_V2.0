@@ -692,6 +692,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             self.local_params["max_threshold_ball"] = int(self.spin_thresh_upper_ball.value())
             self.local_params["ball_area_min_threshold"] = int(self.spin_area_min.value())
             self.local_params["ball_area_max_threshold"] = int(self.spin_area_max.value())
+            self.local_params["ball_radius_tolerance"] = float(self.line_ball_radius_tolerance_allow.text())
             
             # 从LineEdit获取参数（需要处理空值）
             if hasattr(self, 'line_ballnum_allow') and self.line_ballnum_allow.text().strip():

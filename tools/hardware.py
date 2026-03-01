@@ -497,7 +497,6 @@ class ModBus_Manager:
                 return False, "WRITE_SINGLE_COIL requires exactly one value"
             
             try:
-                print(function_code,address,len(value_list),value_list[0])
                 master.execute(1, function_code, address, len(value_list),value_list[0])
                 return True, None
             except Exception as e:

@@ -1,4 +1,10 @@
 # Python 编译/缓存文件
+Image/
+Log/
+config/
+docs/
+dist/
+build/
 __pycache__/
 *.pyc
 *.pyo
@@ -12,9 +18,3 @@ __pycache__/
 *.pyzwzwz
 *.pyzwzwzw
 *.pyzwzwzwz
-.Image/
-.Log/
-.config/
-.docs/
-.dist/
-.build/
