@@ -373,10 +373,7 @@
        </sizepolicy>
       </property>
       <property name="styleSheet">
-       <string notr="true">QTabBar::tab{
-	width:100;
-	height:50
-}</string>
+       <string notr="true">QTabBar::tab:left { padding: 8px 12px; }</string>
       </property>
       <property name="tabPosition">
        <enum>QTabWidget::West</enum>

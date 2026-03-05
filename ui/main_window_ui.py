@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Form implementation generated from reading ui file 'ui/main_window.ui'
+# Form implementation generated from reading ui file 'd:\DATA\JigSaw_v2.0\ui\main_window.ui'
 #
 # Created by: PyQt5 UI code generator 5.15.11
 #
@@ -214,10 +214,7 @@ class Ui_MainWindow(object):
         sizePolicy.setVerticalStretch(1)
         sizePolicy.setHeightForWidth(self.tabWidget.sizePolicy().hasHeightForWidth())
         self.tabWidget.setSizePolicy(sizePolicy)
-        self.tabWidget.setStyleSheet("QTabBar::tab{\n"
-"    width:100;\n"
-"    height:50\n"
-"}")
+        self.tabWidget.setStyleSheet("QTabBar::tab:left { padding: 8px 12px; }")
         self.tabWidget.setTabPosition(QtWidgets.QTabWidget.West)
         self.tabWidget.setTabsClosable(False)
         self.tabWidget.setTabBarAutoHide(False)
@@ -2043,4 +2040,3 @@ class Ui_MainWindow(object):
         self.actionDebug.setText(_translate("MainWindow", "Debug"))
 from ui.tabwidget import TabWidget
 from widgets.zoomable_graphics_view import ZoomableGraphicsView
-

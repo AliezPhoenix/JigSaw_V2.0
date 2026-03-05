@@ -34,8 +34,11 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
     # 1. 初始化
     # =============================================================================
 
-    def __init__(self):
+    def __init__(self, progress_callback=None):
         super().__init__()
+        _report = lambda p, m: progress_callback(p, m) if progress_callback else None
+
+        _report(5, "加载界面...")
         self.setupUi(self)
         self.current_image = {
             "dry": None,
@@ -60,6 +63,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             {"alias": "fulltray_modbus", "host_ip": "192.168.1.50", "port": 505}
         ]
     
+        _report(8, "初始化硬件与配置管理器...")
         self.hardware_manager = HM.Hardware_Manager(self.CAM_LIST)
         self.config_manager = CM.ConfigManager()
         self.modbus_manager = HM.ModBus_Manager(self.MODBUS_INFO_LIST)
@@ -104,17 +108,20 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 'defect_counts': {'Mark': 0, 'Size': 0, 'Area': 0, 'Ball Count': 0, 'Scratch': 0, 'Shift': 0}
             }
         }
-        self._devices_connect()
+        self._devices_connect(progress_callback=_report)
+        _report(50, "连接按钮信号...")
         self._all_button_connect()
         
         # 替换 label_mapping_dry 和 label_mapping_transfer 为 InteractiveBgaLabel
+        _report(55, "初始化映射标签...")
         self._replace_mapping_label("dry")
         self._replace_mapping_label("transfer")
-        
+
         # 创建日志查看和图像查看tab页面
+        _report(65, "创建日志与图像查看器...")
         self.log_viewer_widget = LogViewerWidget(self)
         self.image_viewer_widget = ImageViewerWidget(self)
-        
+
         # 添加到tabWidget（在现有tab之后）
         self.tabWidget.addTab(self.log_viewer_widget, "")
         self.tabWidget.addTab(self.image_viewer_widget, "")
@@ -131,7 +138,9 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "color: orange ; font-weight: bold; font-size: 20pt; "
             "background-color: yellow; padding: 10px; border-radius: 5px;"
         )
+        _report(85, "初始化统计表格...")
         self._init_statistics_table()
+        _report(95, "启动完成")
 
     def _init_statistics_table(self):
         """初始化统计表格：设置表头、固定行标签、只读"""
@@ -454,22 +463,31 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
     # 4. 硬件与设备
     # =============================================================================
 
-    def _devices_connect(self):
-        
+    def _devices_connect(self, progress_callback=None):
+        total = len(self.CAM_LIST) + len(self.MODBUS_INFO_LIST)
+        step = 40 / max(1, total)  # 10% -> 50%
+        idx = 0
+
         for each_cam in self.CAM_LIST:
             each_cam_alias = each_cam['alias']
+            if progress_callback:
+                progress_callback(min(50, int(10 + step * (idx + 1))), f"连接相机 {each_cam_alias}...")
             if self.connection_status["camera"].get(each_cam_alias) is not None and self.connection_status["camera"].get(each_cam_alias):
+                idx += 1
                 continue
             success,msg,_ = self.hardware_manager.connect(each_cam_alias)
             if not success:
                 print( "警告", f"连接{each_cam_alias}失败: {msg}")
             else:
                 self.connection_status["camera"][each_cam_alias] = True
-
+            idx += 1
 
         for each_modbut in self.MODBUS_INFO_LIST:
             each_modbut_alias = each_modbut['alias']
+            if progress_callback:
+                progress_callback(min(50, int(10 + step * (idx + 1))), f"连接 Modbus {each_modbut_alias}...")
             if self.connection_status["modbus"].get(each_modbut_alias) is not None and self.connection_status["modbus"].get(each_modbut_alias):
+                idx += 1
                 continue
             success,msg = self.modbus_manager.connect(each_modbut_alias)
             if not success:
@@ -477,6 +495,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 return
             else:
                 self.connection_status["modbus"][each_modbut_alias] = True
+            idx += 1
 
         self._update_connection_status()
 

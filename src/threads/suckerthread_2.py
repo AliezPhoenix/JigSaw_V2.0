@@ -1,17 +1,14 @@
 # 从共享导入文件导入所有需要的模块
-from src.threads.thread_imports import (
-    QThread, pyqtSignal, cv, np, time, cst,
-    Hardware_Manager, ModBus_Manager, Bga_Strip,
-)
+from src.threads.thread_imports import *
 from src.detectors.sucker_detector import SuckerDetector
-
-
+import modbus_tk.defines as cst
 def _draw_result_on_image(image, result_dict):
     """在图像上绘制检测结果（矩形和十字线）"""
     if image is None:
         return None
     img = image.copy()
     if len(img.shape) == 2:
+        
         img = cv.cvtColor(img, cv.COLOR_GRAY2BGR)
     h, w = img.shape[:2]
     center_x, center_y = w // 2, h // 2

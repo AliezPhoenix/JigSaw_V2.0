@@ -6,6 +6,7 @@ docs/
 dist/
 build/
 __pycache__/
+todos/
 *.pyc
 *.pyo
 *.pyd
