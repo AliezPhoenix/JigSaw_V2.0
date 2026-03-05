@@ -1,3 +1,4 @@
+import re
 import numpy as np
 import cv2 as cv
 import datetime
@@ -10,6 +11,14 @@ import torch.nn as nn
 from torchvision import models
 from torchvision import transforms as torch_transforms
 from PIL import Image as PILImage
+
+
+def sanitize_filename_part(s: str) -> str:
+    """移除路径遍历危险字符，仅保留安全字符用于文件名（防止 Modbus 数据注入）"""
+    s = str(s).strip()
+    s = re.sub(r'[^\w\-.]', '_', s)  # 只保留字母数字下划线横线点
+    return s[:64] if s else "unknown"
+
 
 def create_alternating_array(rows, cols, start_element, values=(0, 3)):
     """

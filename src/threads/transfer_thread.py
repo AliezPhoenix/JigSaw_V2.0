@@ -133,8 +133,8 @@ class TransferThread(QThread):
             defect_type: 缺陷类型(NG类型，ORI)
         """
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        lot_id = self.bga_strip.strip_lot if hasattr(self.bga_strip, 'strip_lot') else "LOT"
-        sn_id = self.bga_strip.strip_sn if hasattr(self.bga_strip, 'strip_sn') else "SN"
+        lot_id = sanitize_filename_part(self.bga_strip.strip_lot if hasattr(self.bga_strip, 'strip_lot') else "LOT")
+        sn_id = sanitize_filename_part(self.bga_strip.strip_sn if hasattr(self.bga_strip, 'strip_sn') else "SN")
         side = self.bga_strip.strip_side if hasattr(self.bga_strip, 'strip_side') else "front"
         
         save_dir = "Image/Data_Save_Transfer"

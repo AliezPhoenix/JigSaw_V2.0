@@ -1,7 +1,9 @@
 # 从共享导入文件导入所有需要的模块
-from src.threads.thread_imports import *
+from src.threads.thread_imports import (
+    QThread, pyqtSignal, cv, np, time, cst,
+    Hardware_Manager, ModBus_Manager, Bga_Strip,
+)
 from src.detectors.sucker_detector import SuckerDetector
-import modbus_tk.defines as cst
 
 
 def _draw_result_on_image(image, result_dict):
