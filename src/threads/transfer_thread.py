@@ -31,6 +31,9 @@ class TransferThread(QThread):
         
         # 暂停/恢复标志
         self.is_paused = False
+        # 模板缓存（避免每帧从磁盘加载）
+        self._template = None
+        self._template_path = None
     
     #——————————————————————————————参数更新函数————————————————————————————————————————————————————————————————————
     def update_params(self,params:dict):
@@ -92,8 +95,17 @@ class TransferThread(QThread):
         self.mark_detector.update_params(self.mark_detect_params)
         self.scratch_detector.update_params(self.scratch_detect_params)
         self.template_detector.update_params(self.template_detect_params)
+        # 模板路径变化时重新加载
+        new_path = self.params.get("golden_template_path")
+        if new_path != self._template_path:
+            self._template_path = new_path
+            self._template = cv.imread(new_path) if new_path else None
 
-    #——————————————————————————————图像异步保存函数————————————————————————————————————————————————————
+    def _get_template(self):
+        """获取模板图像（使用缓存，路径变化时在 update_params 中已更新）"""
+        return self._template
+
+    #——————————————————————————————图像异步保存函数————————————————————————————————————————————————————————————————————
     def _init_image_save_thread(self):
         """初始化图像保存线程"""
         def _save_images_worker():
@@ -223,7 +235,7 @@ class TransferThread(QThread):
     def run(self):
         trigger_camera_last = 0
         trigger_finished_last = 0
-        while True:
+        while not self.isInterruptionRequested():
             # 检查暂停状态
             if self.is_paused:
                 time.sleep(0.1)
@@ -267,8 +279,8 @@ class TransferThread(QThread):
                     continue
                 image_result = cv.cvtColor(image.copy(),cv.COLOR_GRAY2BGR)
 
-                #——————————————————模板图像加载————————————————————————————————————
-                template = cv.imread(self.params["golden_template_path"])
+                #——————————————————模板图像加载（使用缓存）————————————————————————————————————
+                template = self._get_template()
                 
                 # 边界检查：模板有效性
                 if not self._check_template_valid(template):

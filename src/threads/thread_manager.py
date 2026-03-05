@@ -95,7 +95,7 @@ class ThreadManager:
         """停止所有线程"""
         for alias, thread_instance in self.threads.items():
             if thread_instance.isRunning():
-                thread_instance.quit()
+                thread_instance.requestInterruption()
                 thread_instance.wait()
                 print(f"停止线程: {alias}")
 

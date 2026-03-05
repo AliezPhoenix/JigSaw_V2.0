@@ -79,7 +79,7 @@ class SuckerThread1(QThread):
         except Exception:
             pass
 
-        while True:
+        while not self.isInterruptionRequested():
             if self.is_paused:
                 time.sleep(0.1)
                 continue
