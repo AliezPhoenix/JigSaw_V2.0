@@ -239,7 +239,7 @@ class FulltrayThread(QThread):
         trigger_camera = 0
         trigger_camera_last = 0
 
-        while True:
+        while not self.isInterruptionRequested():
             if self.is_paused:
                 time.sleep(0.1)
                 continue
