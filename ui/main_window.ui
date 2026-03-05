@@ -1395,11 +1395,31 @@
                <property name="title">
                 <string>统计信息</string>
                </property>
-               <layout class="QGridLayout" name="gridLayout_3" columnstretch="1">
-                <item row="0" column="0">
-                 <widget class="QTextBrowser" name="textBrowser">
-                  <property name="layoutDirection">
-                   <enum>Qt::LeftToRight</enum>
+               <layout class="QVBoxLayout" name="verticalLayout_statistics">
+                <item>
+                 <widget class="QLabel" name="label_statistics_lot_id">
+                  <property name="text">
+                   <string>lot_id: -</string>
+                  </property>
+                  <property name="alignment">
+                   <set>Qt::AlignCenter</set>
+                  </property>
+                  <property name="font">
+                   <font>
+                    <weight>75</weight>
+                    <bold>true</bold>
+                    <pointsize>12</pointsize>
+                   </font>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QTableWidget" name="tableWidget_statistics">
+                  <property name="columnCount">
+                   <number>3</number>
+                  </property>
+                  <property name="rowCount">
+                   <number>10</number>
                   </property>
                  </widget>
                 </item>

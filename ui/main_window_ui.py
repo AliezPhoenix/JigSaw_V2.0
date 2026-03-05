@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Form implementation generated from reading ui file 'd:\DATA\JigSaw_v2.0\ui\main_window.ui'
+# Form implementation generated from reading ui file 'ui/main_window.ui'
 #
 # Created by: PyQt5 UI code generator 5.15.11
 #
@@ -9,7 +9,6 @@
 
 
 from PyQt5 import QtCore, QtGui, QtWidgets
-from widgets.zoomable_graphics_view import ZoomableGraphicsView
 
 
 class Ui_MainWindow(object):
@@ -638,13 +637,22 @@ class Ui_MainWindow(object):
         self.gridLayout_2.addWidget(self.groupBox_4, 2, 0, 1, 2)
         self.groupBox_process_summary = QtWidgets.QGroupBox(self.frame)
         self.groupBox_process_summary.setObjectName("groupBox_process_summary")
-        self.gridLayout_3 = QtWidgets.QGridLayout(self.groupBox_process_summary)
-        self.gridLayout_3.setObjectName("gridLayout_3")
-        self.textBrowser = QtWidgets.QTextBrowser(self.groupBox_process_summary)
-        self.textBrowser.setLayoutDirection(QtCore.Qt.LeftToRight)
-        self.textBrowser.setObjectName("textBrowser")
-        self.gridLayout_3.addWidget(self.textBrowser, 0, 0, 1, 1)
-        self.gridLayout_3.setColumnStretch(0, 1)
+        self.verticalLayout_statistics = QtWidgets.QVBoxLayout(self.groupBox_process_summary)
+        self.verticalLayout_statistics.setObjectName("verticalLayout_statistics")
+        self.label_statistics_lot_id = QtWidgets.QLabel(self.groupBox_process_summary)
+        self.label_statistics_lot_id.setAlignment(QtCore.Qt.AlignCenter)
+        font = QtGui.QFont()
+        font.setPointSize(12)
+        font.setBold(True)
+        font.setWeight(75)
+        self.label_statistics_lot_id.setFont(font)
+        self.label_statistics_lot_id.setObjectName("label_statistics_lot_id")
+        self.verticalLayout_statistics.addWidget(self.label_statistics_lot_id)
+        self.tableWidget_statistics = QtWidgets.QTableWidget(self.groupBox_process_summary)
+        self.tableWidget_statistics.setColumnCount(3)
+        self.tableWidget_statistics.setRowCount(10)
+        self.tableWidget_statistics.setObjectName("tableWidget_statistics")
+        self.verticalLayout_statistics.addWidget(self.tableWidget_statistics)
         self.gridLayout_2.addWidget(self.groupBox_process_summary, 1, 0, 1, 1)
         self.gridLayout_2.setRowStretch(0, 1)
         self.gridLayout_2.setRowStretch(1, 6)
@@ -1922,6 +1930,7 @@ class Ui_MainWindow(object):
         self.pushButton_product_prams_save.setText(_translate("MainWindow", "保存"))
         self.pushButton_product_prams_load.setText(_translate("MainWindow", "载入配方"))
         self.groupBox_process_summary.setTitle(_translate("MainWindow", "统计信息"))
+        self.label_statistics_lot_id.setText(_translate("MainWindow", "lot_id: -"))
         self.pushButton_start.setText(_translate("MainWindow", "开始"))
         self.pushButton_stop.setText(_translate("MainWindow", "停止"))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.Home), _translate("MainWindow", "主界面"))

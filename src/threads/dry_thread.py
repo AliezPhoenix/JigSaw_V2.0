@@ -53,7 +53,8 @@ class DryThread(QThread):
             "ball_radius_tolerance": self.params.get("ball_radius_tolerance", 0.05),
             "std_radius": self.params.get("std_radius", 0.17),
             "expected_ball_count": self.params.get("ball_count", 0),
-            "ball_search_roi": self.params.get("ball_search_roi", [])   
+            "ball_search_roi": self.params.get("ball_search_roi", []),
+            "pixel_size": self.params.get("pixel_size", 0.008823)   
         }
 
         self.shift_detect_params = {
