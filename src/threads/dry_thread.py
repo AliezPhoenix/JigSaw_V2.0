@@ -135,8 +135,8 @@ class DryThread(QThread):
             defect_type: 缺陷类型(NG,ORI)
         """
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        lot_id = self.bga_strip.strip_lot if hasattr(self.bga_strip, 'strip_lot') else "LOT"
-        sn_id = self.bga_strip.strip_sn if hasattr(self.bga_strip, 'strip_sn') else "SN"
+        lot_id = sanitize_filename_part(self.bga_strip.strip_lot if hasattr(self.bga_strip, 'strip_lot') else "LOT")
+        sn_id = sanitize_filename_part(self.bga_strip.strip_sn if hasattr(self.bga_strip, 'strip_sn') else "SN")
         side = self.bga_strip.strip_side if hasattr(self.bga_strip, 'strip_side') else "front"
         
         save_dir = "Image/Data_Save_Dry"
@@ -239,7 +239,7 @@ class DryThread(QThread):
             
             # 边界检查：ModBus数据完整性
             if not self._check_modbus_data(discrete_input_list, input_register_list):
-                self._update_message_signal("ModBus数据完整性验证失败")
+                self._update_message_signal.emit("ModBus数据完整性验证失败")
                 time.sleep(0.01)
                 continue
             
@@ -270,7 +270,7 @@ class DryThread(QThread):
                 if not ret or debug:
                     self._update_message_signal.emit(f"采集图像失败: {msg}")
                     time.sleep(0.01)
-                    image = cv.imread("D:\DATA\JigSaw_v2.0\Image\dry\image_1768810267.8009937.bmp",0)
+                    continue
                 image_result = cv.cvtColor(image.copy(),cv.COLOR_GRAY2BGR)
 
                 #——————————————————模板图像加载————————————————————————————————————
@@ -435,8 +435,8 @@ class DryThread(QThread):
             end_time = datetime.now()
             timestamp = end_time.strftime("%Y%m%d_%H%M%S")
             side = self.bga_strip.strip_side if hasattr(self.bga_strip, 'strip_side') else "front"
-            lot_id = self.bga_strip.strip_lot if hasattr(self.bga_strip, 'strip_lot') else "none"
-            sn_id = self.bga_strip.strip_sn if hasattr(self.bga_strip, 'strip_sn') else "none"
+            lot_id = sanitize_filename_part(self.bga_strip.strip_lot if hasattr(self.bga_strip, 'strip_lot') else "none")
+            sn_id = sanitize_filename_part(self.bga_strip.strip_sn if hasattr(self.bga_strip, 'strip_sn') else "none")
 
 
             log_filename = f"{lot_id}_{sn_id}_dry_{side}_{timestamp}.xlsx"

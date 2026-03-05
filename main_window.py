@@ -704,6 +704,8 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
     
     def stop(self):
         """停止所有线程"""
+        if self.thread_manager is None:
+            return
         self.thread_manager.stop_all_threads()
         print("所有线程已停止")
         self.label_main_running_status.setText("待机")
@@ -776,6 +778,8 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                     print(f"吸嘴2显示错误: {e}")
 
     def _update_label_from_image(self,label:QLabel,image:np.ndarray):
+        if len(image.shape) == 2:
+            image = cv.cvtColor(image, cv.COLOR_GRAY2BGR)
         height, width, channel = image.shape
         bytes_per_line = 3 * width
         # 将numpy数组转换为bytes（QImage需要bytes类型，不能直接使用memoryview）
@@ -918,7 +922,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         
         if station == "all":
             success_list =[]
-            for sub_station in ["dry_thread","transfer_thread","sucker1_therad","sucker2_thread","fulltray_thread"]:
+            for sub_station in ["dry_thread","transfer_thread","sucker_thread_1","sucker_thread_2","fulltray_thread"]:
                 success = self.thread_manager.update_params(sub_station)
                 success_list.append(success)
             if all(success_list):
