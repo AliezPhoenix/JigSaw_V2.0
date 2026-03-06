@@ -5,7 +5,7 @@ from src.support.support_funs import fulltray_load_model, fulltray_predict_singl
 
 
 class FulltrayThread(QThread):
-    _update_image_signal = pyqtSignal(object)  # 发射 np.ndarray，由 _update_display 统一处理显示
+    _update_image_signal = pyqtSignal(object)  # (图像, Bga_Strip|None)，由 _update_display 统一处理显示
     _update_result_signal = pyqtSignal(bool, int, int, int, float)  # (is_ok, product_count, total_cells, empty_count, avg_confidence)
 
     # ———————————————————————————————初始化————————————————————————————————————————————————————————————————

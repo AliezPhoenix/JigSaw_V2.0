@@ -225,10 +225,12 @@ class Bga_Strip():
                     full_slice[row, col] = 3  # Size - 紫色
                 elif "Ball Count" in defect_type:
                     full_slice[row, col] = 4  # BallCount - 橙色
-                elif "Area" in defect_type:
+                elif "Ball" in defect_type:
                     full_slice[row, col] = 5  # Area - 黄色
                 elif "Shift" in defect_type:
                     full_slice[row, col] = 6  # Shift - 棕色
+                elif "Scratch" in defect_type:
+                    full_slice[row, col] = 7  #Scratch - 蓝色
                 else:
                     full_slice[row, col] = 8  # 默认NG（如Scratch等）- 红色
         
@@ -374,6 +376,8 @@ class Bga_Strip():
                     color = (0, 255, 255)  # Area - 黄色
                 elif array[i, j] == 6:
                     color = (42, 42, 165)  # Shift - 棕色
+                elif array[i,j] == 7:
+                    color = (255,0,0)    # Scartch - 蓝色
                 elif array[i, j] == 8:
                     color = (0, 0, 255)  # NG - 红色
                 elif array[i, j] == 99:

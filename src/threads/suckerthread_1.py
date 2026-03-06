@@ -40,7 +40,7 @@ def _draw_result_on_image(image, result_dict):
 
 
 class SuckerThread1(QThread):
-    _update_image_signal = pyqtSignal(np.ndarray, Bga_Strip)
+    _update_image_signal = pyqtSignal(np.ndarray, object)  # (图像, Bga_Strip|None)
     _update_statistics_signal = pyqtSignal(dict)
     _update_message_signal = pyqtSignal(str)
 
@@ -55,6 +55,7 @@ class SuckerThread1(QThread):
         self.pixel_size = float(self.params.get("pixel_size", 0.001))
         self.sucker_detector = SuckerDetector(self._build_detector_params())
         self.is_paused = False
+        self.live_display_enabled = False  # 线程安全标志，由主线程通过 set_live_display_enabled 更新
 
     def _build_detector_params(self):
         """从 params 构建 SuckerDetector 所需参数"""
@@ -152,18 +153,22 @@ class SuckerThread1(QThread):
                 except Exception:
                     pass
 
-            # 实时显示（带辅助线）
-            if image is not None and hasattr(self.ui, "radioButton_live_sucker1") and self.ui.radioButton_live_sucker1.isChecked():
+            # 实时显示（带辅助线）- 使用线程安全标志，禁止在工作线程中访问 UI
+            if image is not None and self.live_display_enabled:
                 h, w = image.shape[:2]
                 img_live = image.copy()
-                if len(img_live.shape) == 2:
-                    img_live = cv.cvtColor(img_live, cv.COLOR_GRAY2BGR)
+                img_live = cv.cvtColor(img_live, cv.COLOR_GRAY2BGR)
                 cv.line(img_live, (0, h // 2), (w, h // 2), (0, 255, 0), 2)
                 cv.line(img_live, (w // 2, 0), (w // 2, h), (0, 255, 0), 2)
+
                 self._update_image_signal.emit(img_live, None)
 
             trigger_last = trigger
             time.sleep(0.01)
+
+    def set_live_display_enabled(self, enabled: bool):
+        """由主线程调用，更新实时显示开关（避免工作线程直接访问 UI 导致死锁）"""
+        self.live_display_enabled = enabled
 
     def pause(self):
         self.is_paused = True

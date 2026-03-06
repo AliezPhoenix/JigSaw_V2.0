@@ -1,8 +1,8 @@
 # 从共享导入文件导入所有需要的模块
 from src.threads.thread_imports import *
-    
+
 class TransferThread(QThread):
-    _update_image_signal = pyqtSignal(np.ndarray,Bga_Strip)
+    _update_image_signal = pyqtSignal(np.ndarray, object)  # (图像, Bga_Strip|None)
     _update_statistics_signal = pyqtSignal(dict)  # 统计更新信号
     _update_message_signal = pyqtSignal(str)
 
@@ -19,6 +19,9 @@ class TransferThread(QThread):
         self.scratch_detector = ScratchDetector() ##划痕检测器
         self.template_detector = TemplateDetector() ##模板检测器
         self.bga_strip = Bga_Strip(strip_side="",strip_lot="",strip_sn="",strip_create_time="",params=params)
+        # 模板缓存（必须在 update_params 之前初始化，因为 update_params 会访问 _template_path）
+        self._template = None
+        self._template_path = None
         self.update_params(params)
         
         # 图像异步保存
@@ -31,9 +34,6 @@ class TransferThread(QThread):
         
         # 暂停/恢复标志
         self.is_paused = False
-        # 模板缓存（避免每帧从磁盘加载）
-        self._template = None
-        self._template_path = None
     
     #——————————————————————————————参数更新函数————————————————————————————————————————————————————————————————————
     def update_params(self,params:dict):
@@ -349,10 +349,13 @@ class TransferThread(QThread):
                 if not ((trigger_camera and not trigger_camera_last) or (trigger_finished and not trigger_finished_last)):
                     #——————————————————采集图像————————————————————
                     ret,msg, image_live = self.HM.capture_image("transfer_cam")
+                    h, w = image_live.shape[:2]
                     if not ret:
                         self._update_message_signal.emit(f"采集图像失败: {msg}")
                         continue
                     image_live_bgr = cv.cvtColor(image_live.copy(), cv.COLOR_GRAY2BGR)
+                    cv.line(image_live_bgr, (0, h // 2), (w, h // 2), (0, 255, 0), 2)
+                    cv.line(image_live_bgr, (w // 2, 0), (w // 2, h), (0, 255, 0), 2)
                     self._update_image_signal.emit(image_live_bgr,None)
             else:
                 time.sleep(0.01)

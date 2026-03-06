@@ -422,8 +422,23 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.pushButton_fulltray_set_roi.clicked.connect(lambda: self.create_search_roi("fulltray"))
         self.pushButton_fulltray_select_image.clicked.connect(lambda: self.load_current_image("fulltray"))
         self.pushButton_fulltray_test.clicked.connect(self.manual_test_fulltray)
+        # 吸嘴实时画面 radiobutton：由主线程更新线程内标志，避免工作线程访问 UI 导致死锁
+        self.radioButton_live_sucker1.toggled.connect(self._on_sucker1_live_toggled)
+        self.radioButton_live_sucker2.toggled.connect(self._on_sucker2_live_toggled)
         # self.pushButton_product_prams_load.clicked.connect(self._load_config_file())
     
+    def _on_sucker1_live_toggled(self, checked):
+        """主线程槽：更新 SuckerThread1 的实时显示标志（避免工作线程访问 UI 死锁）"""
+        s1 = self.thread_manager.get_thread_obj("sucker_thread_1") if self.thread_manager else None
+        if s1:
+            s1.set_live_display_enabled(checked)
+
+    def _on_sucker2_live_toggled(self, checked):
+        """主线程槽：更新 SuckerThread2 的实时显示标志（避免工作线程访问 UI 死锁）"""
+        s2 = self.thread_manager.get_thread_obj("sucker_thread_2") if self.thread_manager else None
+        if s2:
+            s2.set_live_display_enabled(checked)
+
     def _all_signal_connect(self):
         """连接各线程信号到 _update_display 及统计/消息占位"""
         t = getattr(self, "thread_manager", None)
@@ -452,12 +467,14 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             s1._update_image_signal.connect(lambda img, bga: self._update_display("sucker_1", img, bga))
             s1._update_statistics_signal.connect(lambda stats: self._update_statistics("sucker_1", stats))
             s1._update_message_signal.connect(lambda msg: self._update_message("sucker_1", msg))
+            s1.set_live_display_enabled(self.radioButton_live_sucker1.isChecked())
         # sucker_thread_2
         s2 = t.get_thread_obj("sucker_thread_2")
         if s2:
             s2._update_image_signal.connect(lambda img, bga: self._update_display("sucker_2", img, bga))
             s2._update_statistics_signal.connect(lambda stats: self._update_statistics("sucker_2", stats))
             s2._update_message_signal.connect(lambda msg: self._update_message("sucker_2", msg))
+            s2.set_live_display_enabled(self.radioButton_live_sucker2.isChecked())
 
     # =============================================================================
     # 4. 硬件与设备

@@ -391,7 +391,7 @@
        <attribute name="title">
         <string>主界面</string>
        </attribute>
-       <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="10,2">
+       <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="5,1">
         <property name="rightMargin">
          <number>8</number>
         </property>
@@ -1035,6 +1035,12 @@
           </property>
           <item>
            <widget class="QFrame" name="frame">
+            <property name="maximumSize">
+             <size>
+              <width>500</width>
+              <height>16777215</height>
+             </size>
+            </property>
             <property name="frameShape">
              <enum>QFrame::StyledPanel</enum>
             </property>
@@ -1395,29 +1401,42 @@
                <layout class="QVBoxLayout" name="verticalLayout_statistics">
                 <item>
                  <widget class="QLabel" name="label_statistics_lot_id">
+                  <property name="font">
+                   <font>
+                    <pointsize>12</pointsize>
+                    <weight>75</weight>
+                    <bold>true</bold>
+                   </font>
+                  </property>
                   <property name="text">
                    <string>lot_id: -</string>
                   </property>
                   <property name="alignment">
                    <set>Qt::AlignCenter</set>
                   </property>
-                  <property name="font">
-                   <font>
-                    <weight>75</weight>
-                    <bold>true</bold>
-                    <pointsize>12</pointsize>
-                   </font>
-                  </property>
                  </widget>
                 </item>
                 <item>
                  <widget class="QTableWidget" name="tableWidget_statistics">
-                  <property name="columnCount">
-                   <number>3</number>
-                  </property>
                   <property name="rowCount">
                    <number>10</number>
                   </property>
+                  <property name="columnCount">
+                   <number>3</number>
+                  </property>
+                  <row/>
+                  <row/>
+                  <row/>
+                  <row/>
+                  <row/>
+                  <row/>
+                  <row/>
+                  <row/>
+                  <row/>
+                  <row/>
+                  <column/>
+                  <column/>
+                  <column/>
                  </widget>
                 </item>
                </layout>
@@ -2786,7 +2805,7 @@
                </widget>
               </item>
               <item row="2" column="3">
-               <widget class="QLineEdit" name="lineEdit_sucker1_Gain">
+               <widget class="QLineEdit" name="lineEdit_Gain_sucker1">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                   <horstretch>0</horstretch>
@@ -2885,7 +2904,7 @@
                </widget>
               </item>
               <item row="2" column="1">
-               <widget class="QLineEdit" name="lineEdit_sucker1_AcquisitionFrameRate">
+               <widget class="QLineEdit" name="lineEdit_AcquisitionFrameRate_sucker1">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                   <horstretch>0</horstretch>
@@ -2914,7 +2933,7 @@
                </widget>
               </item>
               <item row="1" column="1">
-               <widget class="QLineEdit" name="lineEdit_sucker1_ExposureTime">
+               <widget class="QLineEdit" name="lineEdit_ExposureTime_sucker1">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                   <horstretch>0</horstretch>
@@ -2930,7 +2949,7 @@
                </widget>
               </item>
               <item row="1" column="3">
-               <widget class="QLineEdit" name="lineEdit_sucker1_Gamma">
+               <widget class="QLineEdit" name="lineEdit_Gamma_sucker1">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                   <horstretch>0</horstretch>
@@ -3032,7 +3051,7 @@
                </widget>
               </item>
               <item row="2" column="3">
-               <widget class="QLineEdit" name="lineEdit_sucker2_Gain">
+               <widget class="QLineEdit" name="lineEdit_Gain_sucker2">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                   <horstretch>0</horstretch>
@@ -3131,7 +3150,7 @@
                </widget>
               </item>
               <item row="2" column="1">
-               <widget class="QLineEdit" name="lineEdit_sucker2_AcquisitionFrameRate">
+               <widget class="QLineEdit" name="lineEdit_AcquisitionFrameRate_sucker2">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                   <horstretch>0</horstretch>
@@ -3160,7 +3179,7 @@
                </widget>
               </item>
               <item row="1" column="1">
-               <widget class="QLineEdit" name="lineEdit_sucker2_ExposureTime">
+               <widget class="QLineEdit" name="lineEdit_ExposureTime_sucker2">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                   <horstretch>0</horstretch>
@@ -3176,7 +3195,7 @@
                </widget>
               </item>
               <item row="1" column="3">
-               <widget class="QLineEdit" name="lineEdit_sucker2_Gamma">
+               <widget class="QLineEdit" name="lineEdit_Gamma_sucker2">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                   <horstretch>0</horstretch>
