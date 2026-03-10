@@ -1,5 +1,12 @@
-pycache/
+# Python 编译/缓存文件
+Image/
+Log/
+config/
+docs/
+dist/
+build/
 __pycache__/
+todos/
 *.pyc
 *.pyo
 *.pyd

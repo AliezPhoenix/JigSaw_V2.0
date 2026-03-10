@@ -449,7 +449,7 @@ class CameraController():
             print('show info','save jpg success!')
         except Exception as e:
             self.b_save_jpg = False
-            raise Exception("get one frame failed:%s" % e.message)
+            raise Exception("get one frame failed:%s" % str(e))
         if None != img_buff:
             del img_buff
         if None != self.buf_save_image:
@@ -487,7 +487,7 @@ class CameraController():
             print('show info','save bmp success!')
         except Exception as e:
             self.b_save_bmp = False
-            raise Exception("get one frame failed:%s" % e.message)
+            raise Exception("get one frame failed:%s" % str(e))
         if None != img_buff:
             del img_buff
         if None != self.buf_save_image:

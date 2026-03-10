@@ -1,8 +1,8 @@
 # 从共享导入文件导入所有需要的模块
 from src.threads.thread_imports import *
-    
+
 class DryThread(QThread):
-    _update_image_signal = pyqtSignal(np.ndarray,Bga_Strip)
+    _update_image_signal = pyqtSignal(np.ndarray, object)  # (图像, Bga_Strip|None)
     _update_statistics_signal = pyqtSignal(dict)  # 统计更新信号
     _update_message_signal = pyqtSignal(str)
 
@@ -19,6 +19,9 @@ class DryThread(QThread):
         self.scratch_detector = ScratchDetector() ##划痕检测器
         self.template_detector = TemplateDetector() ##模板检测器
         self.bga_strip = Bga_Strip(strip_side="",strip_lot="",strip_sn="",strip_create_time="",params=params)
+        # 模板缓存（必须在 update_params 之前初始化，因为 update_params 会访问 _template_path）
+        self._template = None
+        self._template_path = None
         self.update_params(params)
         
         # 图像异步保存
@@ -53,7 +56,8 @@ class DryThread(QThread):
             "ball_radius_tolerance": self.params.get("ball_radius_tolerance", 0.05),
             "std_radius": self.params.get("std_radius", 0.17),
             "expected_ball_count": self.params.get("ball_count", 0),
-            "ball_search_roi": self.params.get("ball_search_roi", [])   
+            "ball_search_roi": self.params.get("ball_search_roi", []),
+            "pixel_size": self.params.get("pixel_size", 0.008823)   
         }
 
         self.shift_detect_params = {
@@ -93,8 +97,17 @@ class DryThread(QThread):
         self.mark_detector.update_params(self.mark_detect_params)
         self.scratch_detector.update_params(self.scratch_detect_params)
         self.template_detector.update_params(self.template_detect_params)
+        # 模板路径变化时重新加载
+        new_path = self.params.get("golden_template_path")
+        if new_path != self._template_path:
+            self._template_path = new_path
+            self._template = cv.imread(new_path) if new_path else None
 
-    #——————————————————————————————图像异步保存函数————————————————————————————————————————————————————
+    def _get_template(self):
+        """获取模板图像（使用缓存，路径变化时在 update_params 中已更新）"""
+        return self._template
+
+    #——————————————————————————————图像异步保存函数————————————————————————————————————————————————————————————————————
     def _init_image_save_thread(self):
         """初始化图像保存线程"""
         def _save_images_worker():
@@ -134,8 +147,8 @@ class DryThread(QThread):
             defect_type: 缺陷类型(NG,ORI)
         """
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        lot_id = self.bga_strip.strip_lot if hasattr(self.bga_strip, 'strip_lot') else "LOT"
-        sn_id = self.bga_strip.strip_sn if hasattr(self.bga_strip, 'strip_sn') else "SN"
+        lot_id = sanitize_filename_part(self.bga_strip.strip_lot if hasattr(self.bga_strip, 'strip_lot') else "LOT")
+        sn_id = sanitize_filename_part(self.bga_strip.strip_sn if hasattr(self.bga_strip, 'strip_sn') else "SN")
         side = self.bga_strip.strip_side if hasattr(self.bga_strip, 'strip_side') else "front"
         
         save_dir = "Image/Data_Save_Dry"
@@ -226,7 +239,7 @@ class DryThread(QThread):
         trigger_camera_last = 0
         trigger_finished_last = 0
         debug = False
-        while True:
+        while not self.isInterruptionRequested():
             # 检查暂停状态
             if self.is_paused:
                 time.sleep(0.1)
@@ -238,7 +251,7 @@ class DryThread(QThread):
             
             # 边界检查：ModBus数据完整性
             if not self._check_modbus_data(discrete_input_list, input_register_list):
-                self._update_message_signal("ModBus数据完整性验证失败")
+                self._update_message_signal.emit("ModBus数据完整性验证失败")
                 time.sleep(0.01)
                 continue
             
@@ -269,11 +282,11 @@ class DryThread(QThread):
                 if not ret or debug:
                     self._update_message_signal.emit(f"采集图像失败: {msg}")
                     time.sleep(0.01)
-                    image = cv.imread("D:\DATA\JigSaw_v2.0\Image\dry\image_1768810267.8009937.bmp",0)
+                    continue
                 image_result = cv.cvtColor(image.copy(),cv.COLOR_GRAY2BGR)
 
-                #——————————————————模板图像加载————————————————————————————————————
-                template =cv.imread(self.params["golden_template_path"])
+                #——————————————————模板图像加载（使用缓存）————————————————————————————————————
+                template = self._get_template()
                 
                 # 边界检查：模板有效性
                 if not self._check_template_valid(template):
@@ -326,9 +339,6 @@ class DryThread(QThread):
                     log_info = self.bga_strip.get_log_info()
 
                     success = self._write_modbus_registers(send_data, mode)
-                    print(success)
-                    print(len(send_data))
-                    print(send_data)
                     self.write_log_to_file(log_info)
                 
                 success,msg = self.MM.write(alias="dry_modbus",address = 0,value_list=[1],function_code=cst.WRITE_SINGLE_COIL)
@@ -339,18 +349,21 @@ class DryThread(QThread):
                 self.MM.write(alias="dry_modbus",address = 2,value_list=[0],function_code=cst.WRITE_SINGLE_COIL)
             trigger_camera_last = trigger_camera
             trigger_finished_last = trigger_finished
-            print(trigger_camera,trigger_camera_last,trigger_finished,trigger_finished_last)
             #————————————————————————实时显示画面————————————————————
             if self.ui.radioButton_live_dry.isChecked():
                 #——————————————————只有在没有处理触发信号时才更新实时显示，避免重复采集图像————————————————————————————————————
                 if not ((trigger_camera and not trigger_camera_last) or (trigger_finished and not trigger_finished_last)):
                     #——————————————————采集图像————————————————————
                     ret,msg, image_live = self.HM.capture_image("dry_cam")
+                    h, w = image_live.shape[:2]
                     if not ret:
                         self._update_message_signal.emit(f"采集图像失败: {msg}")
                         continue
-                    image_live = cv.rotate(image_live, cv.ROTATE_90_CLOCKWISE)
+                    
                     image_live_bgr = cv.cvtColor(image_live.copy(), cv.COLOR_GRAY2BGR)
+                    image_live_bgr = cv.rotate(image_live_bgr, cv.ROTATE_90_CLOCKWISE)
+                    cv.line(image_live_bgr, (0, h // 2), (w, h // 2), (0, 255, 0), 2)
+                    cv.line(image_live_bgr, (w // 2, 0), (w // 2, h), (0, 255, 0), 2)
                     self._update_image_signal.emit(image_live_bgr,None)
             else:
                 time.sleep(0.01)
@@ -438,8 +451,8 @@ class DryThread(QThread):
             end_time = datetime.now()
             timestamp = end_time.strftime("%Y%m%d_%H%M%S")
             side = self.bga_strip.strip_side if hasattr(self.bga_strip, 'strip_side') else "front"
-            lot_id = self.bga_strip.strip_lot if hasattr(self.bga_strip, 'strip_lot') else "none"
-            sn_id = self.bga_strip.strip_sn if hasattr(self.bga_strip, 'strip_sn') else "none"
+            lot_id = sanitize_filename_part(self.bga_strip.strip_lot if hasattr(self.bga_strip, 'strip_lot') else "none")
+            sn_id = sanitize_filename_part(self.bga_strip.strip_sn if hasattr(self.bga_strip, 'strip_sn') else "none")
 
 
             log_filename = f"{lot_id}_{sn_id}_dry_{side}_{timestamp}.xlsx"

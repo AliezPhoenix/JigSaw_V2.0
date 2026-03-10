@@ -1,8 +1,24 @@
+import re
 import numpy as np
 import cv2 as cv
 import datetime
 from datetime import datetime as dt
 from src.detectors.functions_demo import convert_numpy_obj, calculate_cpk
+
+# 满盘检测深度学习依赖（程序启动时预加载）
+import torch
+import torch.nn as nn
+from torchvision import models
+from torchvision import transforms as torch_transforms
+from PIL import Image as PILImage
+
+
+def sanitize_filename_part(s: str) -> str:
+    """移除路径遍历危险字符，仅保留安全字符用于文件名（防止 Modbus 数据注入）"""
+    s = str(s).strip()
+    s = re.sub(r'[^\w\-.]', '_', s)  # 只保留字母数字下划线横线点
+    return s[:64] if s else "unknown"
+
 
 def create_alternating_array(rows, cols, start_element, values=(0, 3)):
     """
@@ -209,10 +225,12 @@ class Bga_Strip():
                     full_slice[row, col] = 3  # Size - 紫色
                 elif "Ball Count" in defect_type:
                     full_slice[row, col] = 4  # BallCount - 橙色
-                elif "Area" in defect_type:
+                elif "Ball" in defect_type:
                     full_slice[row, col] = 5  # Area - 黄色
                 elif "Shift" in defect_type:
                     full_slice[row, col] = 6  # Shift - 棕色
+                elif "Scratch" in defect_type:
+                    full_slice[row, col] = 7  #Scratch - 蓝色
                 else:
                     full_slice[row, col] = 8  # 默认NG（如Scratch等）- 红色
         
@@ -358,6 +376,8 @@ class Bga_Strip():
                     color = (0, 255, 255)  # Area - 黄色
                 elif array[i, j] == 6:
                     color = (42, 42, 165)  # Shift - 棕色
+                elif array[i,j] == 7:
+                    color = (255,0,0)    # Scartch - 蓝色
                 elif array[i, j] == 8:
                     color = (0, 0, 255)  # NG - 红色
                 elif array[i, j] == 99:
@@ -1327,3 +1347,92 @@ def execute_product_detection(
     product_info["product_image_result"] = image.copy()
     
     return True, "成功", product_info
+
+
+# ==================== 满盘检测深度学习模型相关函数 ====================
+
+class MobileNetV2ClassifierFulltray(nn.Module):
+    """MobileNetV2满盘分类器"""
+
+    def __init__(self, num_classes=2, pretrained=False):
+        super().__init__()
+        self.backbone = models.mobilenet_v2(pretrained=pretrained)
+        self.backbone.classifier = nn.Sequential(
+            nn.Dropout(0.2),
+            nn.Linear(self.backbone.last_channel, 128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(128, num_classes)
+        )
+
+    def forward(self, x):
+        return self.backbone(x)
+
+
+def fulltray_get_transforms(is_train=False, input_size=150):
+    """满盘检测数据变换"""
+    return torch_transforms.Compose([
+        torch_transforms.Resize((input_size, input_size)),
+        torch_transforms.ToTensor(),
+        torch_transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                  std=[0.229, 0.224, 0.225])
+    ])
+
+
+def fulltray_load_model(model_path, device='cpu'):
+    """
+    加载满盘检测模型
+
+    Args:
+        model_path: 模型文件路径
+        device: 设备 ('cpu' 或 'cuda')
+
+    Returns:
+        加载后的模型
+    """
+    model = MobileNetV2ClassifierFulltray(num_classes=2, pretrained=False)
+    checkpoint = torch.load(model_path, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+    model = model.to(device)
+    return model
+
+
+def fulltray_predict_single_image(model, image_input, device='cpu', input_size=150):
+    """
+    满盘检测单张图像预测
+
+    Args:
+        model: 加载的模型
+        image_input: 图像路径（str）或图像数组（np.ndarray）
+        device: 设备 ('cpu' 或 'cuda')
+        input_size: 输入图像尺寸
+
+    Returns:
+        tuple: (prediction, confidence)
+            - prediction: 0=无产品, 1=有产品
+            - confidence: 置信度 (0-1)
+    """
+    if isinstance(image_input, str):
+        img = cv.imread(image_input, cv.IMREAD_GRAYSCALE)
+        if img is None:
+            raise ValueError(f"无法读取图像: {image_input}")
+    elif isinstance(image_input, np.ndarray):
+        if len(image_input.shape) == 3:
+            img = cv.cvtColor(image_input, cv.COLOR_BGR2GRAY)
+        else:
+            img = image_input.copy()
+    else:
+        raise ValueError(f"不支持的图像输入类型: {type(image_input)}")
+
+    img = cv.cvtColor(img, cv.COLOR_GRAY2RGB)
+    transform = fulltray_get_transforms(is_train=False, input_size=input_size)
+    img_pil = PILImage.fromarray(img)
+    img_tensor = transform(img_pil).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        outputs = model(img_tensor)
+        probabilities = torch.softmax(outputs, dim=1)
+        confidence, predicted = torch.max(probabilities, 1)
+
+    return predicted.item(), confidence.item()

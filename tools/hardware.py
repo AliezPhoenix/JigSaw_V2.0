@@ -497,12 +497,19 @@ class ModBus_Manager:
                 return False, "WRITE_SINGLE_COIL requires exactly one value"
             
             try:
-                print(function_code,address,len(value_list),value_list[0])
                 master.execute(1, function_code, address, len(value_list),value_list[0])
                 return True, None
             except Exception as e:
                 return False, e
                 
+        elif function_code == cst.WRITE_SINGLE_REGISTER:
+            if len(value_list) != 1:
+                return False, "WRITE_SINGLE_REGISTER requires exactly one value"
+            try:
+                master.execute(1, function_code, address, output_value=value_list[0])
+                return True, None
+            except Exception as e:
+                return False, e
         elif function_code == cst.WRITE_MULTIPLE_REGISTERS:
             # 写入多个寄存器，最大单次传输长度为123
             if len(value_list) > self.MAX_REGISTERS:
