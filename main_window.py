@@ -394,7 +394,12 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.pushButton_transfer_cam_params_save.clicked.connect(lambda: self._operate_hardware("write_cam_params","transfer_cam"))
         self.pushButton_sucker1_cam_params_save.clicked.connect(lambda: self._operate_hardware("write_cam_params","sucker1_cam"))
         self.pushButton_sucker2_cam_params_save.clicked.connect(lambda: self._operate_hardware("write_cam_params","sucker2_cam"))
-        
+        self.pushButton_capture_one_frame_dry.clicked.connect(lambda: self._operate_hardware("capture_one_frame","dry_cam"))
+        self.pushButton_capture_one_frame_transfer.clicked.connect(lambda: self._operate_hardware("capture_one_frame","transfer_cam"))
+        self.pushButton_capture_one_frame_sucker1.clicked.connect(lambda: self._operate_hardware("capture_one_frame","sucker1_cam"))
+        self.pushButton_capture_one_frame_sucker2.clicked.connect(lambda: self._operate_hardware("capture_one_frame","sucker2_cam"))
+        self.pushButton_capture_one_frame_fulltray.clicked.connect(lambda: self._operate_hardware("capture_one_frame","fulltray_cam"))
+
         self.pushButton_template_choose.clicked.connect(lambda: self._load_template("dry"))
         self.pushButton_transfer_template_choose.clicked.connect(lambda: self._load_template("transfer"))
 
@@ -405,6 +410,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.pushButton_confirm_params_all.clicked.connect(lambda: self.confirm_params("all"))
         self.pushButton_confirm_params_dry.clicked.connect(lambda: self.confirm_params("dry_thread"))
         self.pushButton_confirm_params_transfer.clicked.connect(lambda: self.confirm_params("transfer_thread"))
+        self.pushButton_confirm_params_fulltray.clicked.connect(lambda: self.confirm_params("fulltray_thread"))
 
         self.PushButton_test_tempalte.clicked.connect(lambda:self.show_pramas_set_dialog("dry"))
         self.PushButton_transfer_test_template.clicked.connect(lambda:self.show_pramas_set_dialog("transfer"))
@@ -417,12 +423,11 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.pushButton_current_image_select_transfer.clicked.connect(lambda: self.load_current_image("transfer"))
         self.pushButton_create_checkable_roi_dry.clicked.connect(lambda: self.create_search_roi("dry"))
         self.pushButton_create_checkable_roi_transfer.clicked.connect(lambda: self.create_search_roi("transfer"))
-        # self.pushButton_fulltray_save.clicked.connect(self.save_fulltray_params)
+        
         self.pushButton_fulltray_select_model.clicked.connect(self.select_fulltray_model)
         self.pushButton_fulltray_set_roi.clicked.connect(lambda: self.create_search_roi("fulltray"))
         self.pushButton_fulltray_select_image.clicked.connect(lambda: self.load_current_image("fulltray"))
         self.pushButton_fulltray_test.clicked.connect(self.manual_test_fulltray)
-        # 吸嘴实时画面 radiobutton：由主线程更新线程内标志，避免工作线程访问 UI 导致死锁
         self.radioButton_live_sucker1.toggled.connect(self._on_sucker1_live_toggled)
         self.radioButton_live_sucker2.toggled.connect(self._on_sucker2_live_toggled)
         # self.pushButton_product_prams_load.clicked.connect(self._load_config_file())
@@ -635,6 +640,15 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             except Exception as e:
                 QMessageBox.warning(self, "错误", f"设置{hardware_alias}相机参数失败：{str(e)}")
 
+        if action == "capture one frame":
+            success, msg, image = self.hardware_manager.capture_image(hardware_alias)
+            if not success:
+                QMessageBox.warning(self, "警告", f"拍照{hardware_alias}失败: {msg}")
+            else:
+                label = getattr(self, f"label_current_cam_live_{hardware_alias.split('_')[0]}")
+                self._update_label_from_image(label, image)
+                self.current_image[hardware_alias.split('_')[0]] = image
+                QApplication.processEvents()
     # =============================================================================
     # 5. 线程控制
     # =============================================================================
