@@ -1,4 +1,5 @@
-from PyQt5.QtWidgets import QApplication, QDialog, QPushButton, QFileDialog, QMessageBox
+from PyQt5.QtWidgets import (QApplication, QDialog, QPushButton, QFileDialog, QMessageBox,
+    QWidget, QGridLayout, QLabel, QLineEdit, QCheckBox, QGroupBox)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap, QImage
 from ui.TransferPramasSetDialog_ui import Ui_TransferPramasSetDialog
@@ -19,6 +20,9 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
         self.setupUi(self)
         self.is_init = False
         self.showMaximized()
+        
+        # 新增「报警参数」Tab
+        self._init_ng_monitor_tab()
 
         self.ball_detector = BallDetector()
         self.size_detector = SizeDetector()
@@ -147,6 +151,40 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
             self.horizontalSlider_thresh_upper_scratch.valueChanged.connect(lambda: self.auto_run_test("scratch"))
         
         self.is_init = True
+    
+    def _init_ng_monitor_tab(self):
+        """创建报警参数 Tab"""
+        tab = QWidget()
+        layout = QGridLayout(tab)
+        grp = QGroupBox("NG 监控参数")
+        gl = QGridLayout(grp)
+        self.checkBox_ng_monitor_enabled = QCheckBox("启用监控")
+        self.checkBox_ng_monitor_enabled.setChecked(True)
+        gl.addWidget(self.checkBox_ng_monitor_enabled, 0, 0, 1, 2)
+        defect_map = [
+            ("Mark", "标记", "lineEdit_defect_limit_Mark"),
+            ("Size", "尺寸", "lineEdit_defect_limit_Size"),
+            ("Area", "面积", "lineEdit_defect_limit_Area"),
+            ("Ball Count", "缺球", "lineEdit_defect_limit_BallCount"),
+            ("Scratch", "划痕", "lineEdit_defect_limit_Scratch"),
+            ("Shift", "偏移", "lineEdit_defect_limit_Shift"),
+        ]
+        for i, (key, label, attr) in enumerate(defect_map):
+            le = QLineEdit()
+            le.setPlaceholderText("数量上限")
+            setattr(self, attr, le)
+            gl.addWidget(QLabel(f"{label}:"), i + 1, 0)
+            gl.addWidget(le, i + 1, 1)
+        gl.addWidget(QLabel("良率下限(%):"), 7, 0)
+        self.lineEdit_min_yield_rate = QLineEdit()
+        self.lineEdit_min_yield_rate.setPlaceholderText("95.0")
+        gl.addWidget(self.lineEdit_min_yield_rate, 7, 1)
+        gl.addWidget(QLabel("良率最小样本量:"), 8, 0)
+        self.lineEdit_min_yield_sample_size = QLineEdit()
+        self.lineEdit_min_yield_sample_size.setPlaceholderText("100")
+        gl.addWidget(self.lineEdit_min_yield_sample_size, 8, 1)
+        layout.addWidget(grp)
+        self.tabWidget.addTab(tab, "报警参数")
     
     def auto_run_test(self,detect_type=None):
         """当 Slider 数值变化时自动触发测试（仅在初始化完成后）"""
@@ -725,6 +763,23 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
                         self._update_template_display_with_markers()
                 QApplication.processEvents()
                 QMessageBox.information(self, "成功", "参数已成功加载")
+            
+            # ng_monitor 报警参数（每次加载都同步到 UI）
+            ng_monitor = self.local_params.get("ng_monitor", {})
+            self.checkBox_ng_monitor_enabled.setChecked(ng_monitor.get("monitor_enabled", True))
+            limits = ng_monitor.get("defect_limits", {})
+            defect_edit_map = [
+                ("Mark", "lineEdit_defect_limit_Mark", 5),
+                ("Size", "lineEdit_defect_limit_Size", 3),
+                ("Area", "lineEdit_defect_limit_Area", 3),
+                ("Ball Count", "lineEdit_defect_limit_BallCount", 3),
+                ("Scratch", "lineEdit_defect_limit_Scratch", 3),
+                ("Shift", "lineEdit_defect_limit_Shift", 3),
+            ]
+            for key, attr, default in defect_edit_map:
+                getattr(self, attr).setText(str(limits.get(key, default)))
+            self.lineEdit_min_yield_rate.setText(str(ng_monitor.get("min_yield_rate", 95.0)))
+            self.lineEdit_min_yield_sample_size.setText(str(ng_monitor.get("min_yield_sample_size", 100)))
         except Exception as e:
             QMessageBox.warning(self, "错误", f"加载参数失败: {str(e)}")
             import traceback
@@ -793,6 +848,39 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
                 self.local_params["scratch_check_enable"] = self.radioButton_scratch_check_enable.isChecked()
             if hasattr(self, 'radioButton_shift_check_enable'):
                 self.local_params["shift_check_enable"] = self.radioButton_shift_check_enable.isChecked()
+            
+            # ng_monitor 报警参数
+            ng_monitor = {
+                "monitor_enabled": self.checkBox_ng_monitor_enabled.isChecked(),
+                "defect_limits": {},
+                "min_yield_rate": 95.0,
+                "min_yield_sample_size": 100,
+            }
+            defect_edit_map = [
+                ("Mark", "lineEdit_defect_limit_Mark", 5),
+                ("Size", "lineEdit_defect_limit_Size", 3),
+                ("Area", "lineEdit_defect_limit_Area", 3),
+                ("Ball Count", "lineEdit_defect_limit_BallCount", 3),
+                ("Scratch", "lineEdit_defect_limit_Scratch", 3),
+                ("Shift", "lineEdit_defect_limit_Shift", 3),
+            ]
+            for key, attr, default in defect_edit_map:
+                try:
+                    t = getattr(self, attr).text().strip()
+                    ng_monitor["defect_limits"][key] = int(t) if t else default
+                except ValueError:
+                    ng_monitor["defect_limits"][key] = default
+            try:
+                t = self.lineEdit_min_yield_rate.text().strip()
+                ng_monitor["min_yield_rate"] = float(t) if t else 95.0
+            except ValueError:
+                ng_monitor["min_yield_rate"] = 95.0
+            try:
+                t = self.lineEdit_min_yield_sample_size.text().strip()
+                ng_monitor["min_yield_sample_size"] = int(t) if t else 100
+            except ValueError:
+                ng_monitor["min_yield_sample_size"] = 100
+            self.local_params["ng_monitor"] = ng_monitor
             
             # ROI参数已经在create_roi中更新，这里不需要重复更新
             # 但确保它们存在

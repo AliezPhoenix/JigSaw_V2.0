@@ -258,10 +258,12 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             return
         self._save_last_config_path(file_path)
         self.label_13.setText(os.path.basename(file_path))
-        QMessageBox.information(self, "提示", "配置文件加载成功✅")
-
-        self.config_manager.get_section("work_dry_params")
         self._update_ui_from_config()
+        if self.thread_manager is not None:
+            success_list = []
+            for sub_station in ["dry_thread", "transfer_thread", "sucker_thread_1", "sucker_thread_2", "fulltray_thread"]:
+                success_list.append(self.thread_manager.update_params(sub_station))
+        QMessageBox.information(self, "提示", "配置文件加载成功✅")
         
     def _save_config_file(self):
         file_path, _ = QFileDialog.getSaveFileName(self, "选择配置文件", "./config", "配置文件 (*.json)")
@@ -377,6 +379,15 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             print(f"显示基础mapping图像失败: {str(e)}")
             traceback.print_exc()
 
+    def _update_config_from_signal(self, config_name):
+        """从信号更新配置"""
+        config_path = os.path.join("./config", config_name + ".json")
+        ret,error_message = self.config_manager.load(config_path)
+        if not ret:
+            QMessageBox.warning(self, "警告", f"加载配置文件失败: {error_message}❌")
+            return
+        self._update_ui_from_config()
+        self.confirm_params("all", silent=True)
     # =============================================================================
     # 3. 信号与连接
     # =============================================================================
@@ -454,6 +465,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         if ft:
             ft._update_image_signal.connect(lambda img: self._update_display("fulltray", img, None))
             ft._update_result_signal.connect(self._update_fulltray_result)
+            ft._update_config_changed_signal.connect(self._update_config_from_signal)
         # dry_thread: 发射 (np.ndarray, Bga_Strip|None)，第二参数为 None 表示实时图
         dt = t.get_thread_obj("dry_thread")
         if dt:
@@ -763,6 +775,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "color: orange ; font-weight: bold; font-size: 20pt; "
             "background-color: yellow; padding: 10px; border-radius: 5px;"
         )
+        
 
     def _pause_thread(self):
         pass
@@ -964,7 +977,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
     # 8. 参数与对话框
     # =============================================================================
 
-    def confirm_params(self,station):
+    def confirm_params(self, station, silent: bool = False):
         self._update_config_from_ui()
         self._update_ui_from_config()
         if self.thread_manager is None:
@@ -975,15 +988,15 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             for sub_station in ["dry_thread","transfer_thread","sucker_thread_1","sucker_thread_2","fulltray_thread"]:
                 success = self.thread_manager.update_params(sub_station)
                 success_list.append(success)
-            if all(success_list):
+            if all(success_list) and not silent:
                 QMessageBox.information(self,"提示","参数更新成功✅")
-            else:
+            elif not all(success_list):
                 QMessageBox.warning(self, "错误", "参数更新失败❌")
         else:
             success =self.thread_manager.update_params(station)
-            if success:
+            if success and not silent:
                 QMessageBox.information(self,"提示","参数更新成功✅")
-            else:
+            elif not success:
                 QMessageBox.warning(self, "错误", "参数更新失败❌")
 
     def show_pramas_set_dialog(self,station):

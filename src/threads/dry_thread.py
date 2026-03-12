@@ -34,6 +34,16 @@ class DryThread(QThread):
         
         # 暂停/恢复标志
         self.is_paused = False
+        
+        # NG 监控：上次告警码，用于节流
+        self._last_alarm_code = 0
+        # Lot 级统计（主界面按 lot_id 汇总）
+        self._lot_stats = {
+            "lot_id": "",
+            "total_count": 0,
+            "ng_count": 0,
+            "defect_counts": {"Mark": 0, "Size": 0, "Area": 0, "Ball Count": 0, "Scratch": 0, "Shift": 0}
+        }
     
     #——————————————————————————————参数更新函数————————————————————————————————————————————————————————————————————
     def update_params(self,params:dict):
@@ -264,6 +274,15 @@ class DryThread(QThread):
             if trigger_count  == 1:
                 lot = hex_to_string(self.MM.read("dry_modbus",address=16,count=10,function_code=cst.READ_INPUT_REGISTERS)[1])
                 sn =hex_to_string(self.MM.read("dry_modbus",address=26,count=10,function_code=cst.READ_INPUT_REGISTERS)[1])
+                # lot_id 变化时重置 lot 级统计与告警状态
+                if lot != self._lot_stats.get("lot_id", ""):
+                    self._lot_stats = {
+                        "lot_id": lot,
+                        "total_count": 0,
+                        "ng_count": 0,
+                        "defect_counts": {"Mark": 0, "Size": 0, "Area": 0, "Ball Count": 0, "Scratch": 0, "Shift": 0}
+                    }
+                    self._last_alarm_code = 0
             
                 self.bga_strip = Bga_Strip(
                     strip_side= "front" if trigger_front == 1 else "back",
@@ -330,16 +349,53 @@ class DryThread(QThread):
                 self._update_image_signal.emit(image_result,self.bga_strip)
                 self.bga_strip.write(current_product_list,image)
                 stats_info = self.bga_strip.get_statistics_info()
+                
+                # NG 监控：检查告警并写入 Modbus 寄存器 3
+                ng_monitor = self.params.get("ng_monitor", {})
+                alarm_code = check_ng_alarm(stats_info, ng_monitor) if stats_info else 0
+                if alarm_code != self._last_alarm_code:
+                    try:
+                        coil_val = 1 if alarm_code != 0 else 0
+                        ok, err = self.MM.write(alias="dry_modbus", address=3, value_list=[coil_val], function_code=cst.WRITE_SINGLE_COIL)
+                        if ok:
+                            self._last_alarm_code = alarm_code
+                        else:
+                            print(f"NG监控 Modbus 写入失败: {err}")
+                    except Exception as e:
+                        print(f"NG监控 Modbus 写入异常: {e}")
+                
+                # 主界面统计：strip 进行中发射合并数据（_lot_stats + 当前 strip）
                 if stats_info:
-                    self._update_statistics_signal.emit(stats_info)
+                    merged = self._build_lot_stats_for_emit(stats_info, is_strip_finished=False)
+                    self._update_statistics_signal.emit(merged)
                 
                 #——————————————————完成信号触发，结果分析写入————————————————————————————————————
                 if  trigger_finished == 1 and trigger_finished_last == 0:
+                    # 累加当前 strip 到 lot 级统计
+                    if stats_info:
+                        self._lot_stats["total_count"] += stats_info.get("total_count", 0)
+                        self._lot_stats["ng_count"] += stats_info.get("ng_count", 0)
+                        for k, v in (stats_info.get("defect_counts") or {}).items():
+                            self._lot_stats["defect_counts"][k] = self._lot_stats["defect_counts"].get(k, 0) + v
+                    
                     send_data = self.bga_strip.full_value.copy()
                     log_info = self.bga_strip.get_log_info()
 
                     success = self._write_modbus_registers(send_data, mode)
                     self.write_log_to_file(log_info)
+                    
+                    # strip 结束：再次检查告警，无告警时写 0
+                    final_alarm = check_ng_alarm(stats_info, ng_monitor) if stats_info else 0
+                    if final_alarm == 0 and self._last_alarm_code != 0:
+                        try:
+                            self.MM.write(alias="dry_modbus", address=3, value_list=[0], function_code=cst.WRITE_SINGLE_COIL)
+                            self._last_alarm_code = 0
+                        except Exception as e:
+                            print(f"NG监控 复位 Modbus 写入异常: {e}")
+                    
+                    # 发射 lot 级统计
+                    lot_emit = self._build_lot_stats_for_emit(None, is_strip_finished=True)
+                    self._update_statistics_signal.emit(lot_emit)
                 
                 success,msg = self.MM.write(alias="dry_modbus",address = 0,value_list=[1],function_code=cst.WRITE_SINGLE_COIL)
             elif trigger_camera ==0 and trigger_finished == 0:
@@ -373,6 +429,26 @@ class DryThread(QThread):
             if self.gc_counter >= self.gc_interval:
                 gc.collect()
                 self.gc_counter = 0
+    
+    def _build_lot_stats_for_emit(self, strip_stats: dict, is_strip_finished: bool) -> dict:
+        """构建主界面所需的 lot 级统计（与 get_statistics_info 格式一致）"""
+        total = self._lot_stats["total_count"]
+        ng = self._lot_stats["ng_count"]
+        dc = dict(self._lot_stats["defect_counts"])
+        if not is_strip_finished and strip_stats:
+            total += strip_stats.get("total_count", 0)
+            ng += strip_stats.get("ng_count", 0)
+            for k, v in (strip_stats.get("defect_counts") or {}).items():
+                dc[k] = dc.get(k, 0) + v
+        yield_rate = ((total - ng) / total * 100) if total > 0 else 0.0
+        return {
+            "station": "干燥台",
+            "lot_id": self._lot_stats.get("lot_id", "") or (strip_stats.get("lot_id", "") if strip_stats else ""),
+            "total_count": total,
+            "ng_count": ng,
+            "yield_rate": yield_rate,
+            "defect_counts": dc
+        }
     
     #——————————————————————————————检测产品函数————————————————————————————————————————————————————————————————————
     def _detect_product(self,x,y,product_image:np.ndarray):

@@ -1,0 +1,19 @@
+# JigSaw v2.0 - Python Dependencies
+# GUI
+PyQt5>=5.15.0
+qt-material>=2.14
+
+# Image processing & Computer vision
+opencv-python>=4.5.0
+numpy>=1.20.0
+Pillow>=9.0.0
+
+# Deep learning (BGA detection, fulltray prediction)
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Industrial communication
+modbus-tk>=1.0.0
+
+# Excel export
+openpyxl>=3.0.0

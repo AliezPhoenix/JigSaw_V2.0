@@ -1,13 +1,13 @@
 # 从共享导入文件导入所有需要的模块
 from src.threads.thread_imports import *
 import torch
-from src.support.support_funs import fulltray_load_model, fulltray_predict_single_image
+from src.support.support_funs import fulltray_load_model, fulltray_predict_single_image, hex_to_string
 
 
 class FulltrayThread(QThread):
     _update_image_signal = pyqtSignal(object)  # (图像, Bga_Strip|None)，由 _update_display 统一处理显示
     _update_result_signal = pyqtSignal(bool, int, int, int, float)  # (is_ok, product_count, total_cells, empty_count, avg_confidence)
-
+    _update_config_changed_signal = pyqtSignal(str)
     # ———————————————————————————————初始化————————————————————————————————————————————————————————————————
     def __init__(self, params: dict, HM: Hardware_Manager, MM: ModBus_Manager, ui: 'MainWindow'):
         super().__init__()
@@ -238,16 +238,18 @@ class FulltrayThread(QThread):
         print("FulltrayThread start")
         trigger_camera = 0
         trigger_camera_last = 0
-
+        config_changed_flag_last = 0
         while not self.isInterruptionRequested():
             if self.is_paused:
                 time.sleep(0.1)
                 continue
 
             try:
-                success, discrete_list = self.MM.read("fulltray_modbus", address=0, count=1, function_code=cst.READ_DISCRETE_INPUTS)
-                if success and discrete_list is not None and len(discrete_list) >= 1:
+                success, discrete_list = self.MM.read("fulltray_modbus", address=0, count=3, function_code=cst.READ_DISCRETE_INPUTS)
+                if success and discrete_list is not None and len(discrete_list) >= 3:
                     trigger_camera = discrete_list[0]
+                    empty_flag = discrete_list[1]
+                    config_changed_flag = discrete_list[2]
                 else:
                     time.sleep(0.01)
                     continue
@@ -327,8 +329,14 @@ class FulltrayThread(QThread):
                 else:
                     time.sleep(0.01)
 
-            trigger_camera_last = trigger_camera
+            if config_changed_flag == 1 and config_changed_flag_last == 0:
+                config_name = self.MM.read(alias="fulltray_modbus", address=7, count=10, function_code=cst.READ_HOLDING_REGISTERS)
+                config_name = hex_to_string(config_name)
+                self._update_config_changed_signal.emit(config_name)
 
+            
+            trigger_camera_last = trigger_camera
+            config_changed_flag_last = config_changed_flag
             self.gc_counter += 1
             if self.gc_counter >= self.gc_interval:
                 gc.collect()
