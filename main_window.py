@@ -141,7 +141,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         _report(85, "初始化统计表格...")
         self._init_statistics_table()
         _report(95, "启动完成")
-
+        
     def _init_statistics_table(self):
         """初始化统计表格：设置表头、固定行标签、只读"""
         tbl = self.tableWidget_statistics
@@ -264,6 +264,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             for sub_station in ["dry_thread", "transfer_thread", "sucker_thread_1", "sucker_thread_2", "fulltray_thread"]:
                 success_list.append(self.thread_manager.update_params(sub_station))
         QMessageBox.information(self, "提示", "配置文件加载成功✅")
+        self.pushButton_start.setEnabled(True)
         
     def _save_config_file(self):
         file_path, _ = QFileDialog.getSaveFileName(self, "选择配置文件", "./config", "配置文件 (*.json)")
@@ -441,6 +442,10 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.pushButton_fulltray_test.clicked.connect(self.manual_test_fulltray)
         self.radioButton_live_sucker1.toggled.connect(self._on_sucker1_live_toggled)
         self.radioButton_live_sucker2.toggled.connect(self._on_sucker2_live_toggled)
+
+
+        self.pushButton_start.setEnabled(False)
+        self.pushButton_stop.setEnabled(False)
         # self.pushButton_product_prams_load.clicked.connect(self._load_config_file())
     
     def _on_sucker1_live_toggled(self, checked):
@@ -764,6 +769,8 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         elif success_count == 0:
             print("警告: 没有可启动的线程")
     
+        self.pushButton_start.setEnabled(False)
+        self.pushButton_stop.setEnabled(True)
     def stop(self):
         """停止所有线程"""
         if self.thread_manager is None:
@@ -775,7 +782,8 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "color: orange ; font-weight: bold; font-size: 20pt; "
             "background-color: yellow; padding: 10px; border-radius: 5px;"
         )
-        
+        self.pushButton_start.setEnabled(True)
+        self.pushButton_stop.setEnabled(False)
 
     def _pause_thread(self):
         pass
