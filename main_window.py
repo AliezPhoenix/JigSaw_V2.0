@@ -245,7 +245,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         except Exception as e:
             print(f"自动加载上次配方异常: {e}")
             traceback.print_exc()
-
+        self.pushButton_start.setEnabled(True)
     def _load_config_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "选择配置文件", "./config", "配置文件 (*.json)")
         if not file_path:
@@ -368,13 +368,13 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             dry_total_rows = dry_params.get("total_rows", 0)
             dry_total_cols = dry_params.get("total_cols", 0)
             if dry_total_rows > 0 and dry_total_cols > 0:
-                bga_dry_front = Bga_Strip(strip_side="front", strip_lot="", strip_sn="", strip_create_time="", params=dry_params)
+                bga_dry_front = Bga_Strip(station="dry",strip_side="front", strip_lot="", strip_sn="", strip_create_time="", params=dry_params)
                 self.update_bga_display(bga_dry_front, "front", "dry")
             transfer_params = self.config_manager.get_section("work_transfer_params")
             transfer_total_rows = transfer_params.get("total_rows", 0)
             transfer_total_cols = transfer_params.get("total_cols", 0)
             if transfer_total_rows > 0 and transfer_total_cols > 0:
-                bga_transfer_front = Bga_Strip(strip_side="front", strip_lot="", strip_sn="", strip_create_time="", params=transfer_params)
+                bga_transfer_front = Bga_Strip(station="transfer",strip_side="front", strip_lot="", strip_sn="", strip_create_time="", params=transfer_params)
                 self.update_bga_display(bga_transfer_front, "front", "transfer")
         except Exception as e:
             print(f"显示基础mapping图像失败: {str(e)}")
@@ -977,6 +977,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                     current_image = cv.cvtColor(current_image, cv.COLOR_GRAY2BGR)
                 self._update_label_from_image(label_name, current_image)
                 self.current_image[work_position] = current_image
+                self.template_validity_test(work_position)
         except Exception as e:
             print(f"BGA区域点击显示错误 ({work_position}): {str(e)}")
             traceback.print_exc()

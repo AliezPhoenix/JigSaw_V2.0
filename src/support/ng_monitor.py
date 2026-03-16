@@ -15,8 +15,8 @@ def check_ng_alarm(stats_info: dict, ng_monitor: dict) -> int:
 
     Returns:
         0: 正常
-        9999: 不良数量超限
-        9998: 良率过低
+        999: 不良数量超限
+        998: 良率过低
     """
     if not ng_monitor or not ng_monitor.get("monitor_enabled", True):
         return 0
@@ -39,7 +39,7 @@ def check_ng_alarm(stats_info: dict, ng_monitor: dict) -> int:
             continue
         count = defect_counts.get(defect_type, 0)
         if count >= limit_val:
-            return 9999
+            return 999
 
     # 2. 良率检查：仅当 total_count > min_yield_sample_size 时
     if total_count > min_yield_sample_size:
@@ -48,6 +48,6 @@ def check_ng_alarm(stats_info: dict, ng_monitor: dict) -> int:
         except (TypeError, ValueError):
             min_rate = 100.0
         if yield_rate < min_rate:
-            return 9998
+            return 998
 
     return 0

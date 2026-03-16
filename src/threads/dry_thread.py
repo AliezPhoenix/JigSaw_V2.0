@@ -18,7 +18,7 @@ class DryThread(QThread):
         self.mark_detector = MarkDetector() ##标记检测器
         self.scratch_detector = ScratchDetector() ##划痕检测器
         self.template_detector = TemplateDetector() ##模板检测器
-        self.bga_strip = Bga_Strip(strip_side="",strip_lot="",strip_sn="",strip_create_time="",params=params)
+        self.bga_strip = Bga_Strip(station="dry",strip_side="",strip_lot="",strip_sn="",strip_create_time="",params=params)
         # 模板缓存（必须在 update_params 之前初始化，因为 update_params 会访问 _template_path）
         self._template = None
         self._template_path = None
@@ -285,6 +285,7 @@ class DryThread(QThread):
                     self._last_alarm_code = 0
             
                 self.bga_strip = Bga_Strip(
+                    station="dry",
                     strip_side= "front" if trigger_front == 1 else "back",
                     strip_lot=lot,
                     strip_sn=sn,

@@ -107,7 +107,7 @@ def calculate_write_positions(target_array, window_array):
 
 
 class Bga_Strip():
-    def __init__(self, strip_side:str, strip_lot:str, strip_sn, strip_create_time:str, params:dict):
+    def __init__(self,station,strip_side:str, strip_lot:str, strip_sn, strip_create_time:str, params:dict):
         # 从params中获取尺寸参数
         self.strip_cols = params.get("total_cols", 0)
         self.strip_rows = params.get("total_rows", 0)
@@ -137,7 +137,7 @@ class Bga_Strip():
         self.window_value_cols = self.window_cols
         self.window_value_rows = self.window_rows
         self.side = strip_side
-        
+        self.station = station
         # 初始化图像字典
         for pos in self.position_list:
             self.image_dict[pos[0:2]] = np.zeros((100,100))
@@ -614,7 +614,7 @@ class Bga_Strip():
             yield_rate = ((total_count - ng_total_count) / total_count * 100) if total_count > 0 else 0.0
             
             return {
-                "station": "干燥台" if self.side == "front" else "移栽台",
+                "station": "干燥台" if self.station == "dry" else "移栽台",
                 "lot_id": self.strip_lot if hasattr(self, 'strip_lot') else "",
                 "total_count": total_count,
                 "ng_count": ng_total_count,
@@ -634,7 +634,7 @@ class Bga_Strip():
             import traceback
             traceback.print_exc()
             return {
-                "station": "干燥台" if self.side == "front" else "移栽台",
+                "station": "干燥台" if self.station == "dry" else "移栽台",
                 "lot_id": "",
                 "total_count": 0,
                 "ng_count": 0,

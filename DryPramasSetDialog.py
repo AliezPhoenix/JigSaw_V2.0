@@ -1,5 +1,4 @@
-from PyQt5.QtWidgets import (QApplication, QDialog, QPushButton, QFileDialog, QMessageBox,
-    QWidget, QVBoxLayout, QGridLayout, QLabel, QLineEdit, QCheckBox, QGroupBox)
+from PyQt5.QtWidgets import QApplication, QDialog, QPushButton, QFileDialog, QMessageBox
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap, QImage
 from ui.DryPramasSetDialog_ui import Ui_DryPramasSetDialog
@@ -20,9 +19,6 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         self.setupUi(self)
         self.is_init = False
         self.showMaximized()
-        
-        # 新增「报警参数」Tab
-        self._init_ng_monitor_tab()
 
         self.ball_detector = BallDetector()
         self.size_detector = SizeDetector()
@@ -136,40 +132,6 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         self.horizontalSlider_thresh_upper_scratch.valueChanged.connect(lambda: self.auto_run_test("scratch"))
         
         self.is_init = True
-    
-    def _init_ng_monitor_tab(self):
-        """创建报警参数 Tab"""
-        tab = QWidget()
-        layout = QGridLayout(tab)
-        grp = QGroupBox("NG 监控参数")
-        gl = QGridLayout(grp)
-        self.checkBox_ng_monitor_enabled = QCheckBox("启用监控")
-        self.checkBox_ng_monitor_enabled.setChecked(True)
-        gl.addWidget(self.checkBox_ng_monitor_enabled, 0, 0, 1, 2)
-        defect_map = [
-            ("Mark", "标记", "lineEdit_defect_limit_Mark"),
-            ("Size", "尺寸", "lineEdit_defect_limit_Size"),
-            ("Area", "面积", "lineEdit_defect_limit_Area"),
-            ("Ball Count", "缺球", "lineEdit_defect_limit_BallCount"),
-            ("Scratch", "划痕", "lineEdit_defect_limit_Scratch"),
-            ("Shift", "偏移", "lineEdit_defect_limit_Shift"),
-        ]
-        for i, (key, label, attr) in enumerate(defect_map):
-            le = QLineEdit()
-            le.setPlaceholderText("数量上限")
-            setattr(self, attr, le)
-            gl.addWidget(QLabel(f"{label}:"), i + 1, 0)
-            gl.addWidget(le, i + 1, 1)
-        gl.addWidget(QLabel("良率下限(%):"), 7, 0)
-        self.lineEdit_min_yield_rate = QLineEdit()
-        self.lineEdit_min_yield_rate.setPlaceholderText("95.0")
-        gl.addWidget(self.lineEdit_min_yield_rate, 7, 1)
-        gl.addWidget(QLabel("良率最小样本量:"), 8, 0)
-        self.lineEdit_min_yield_sample_size = QLineEdit()
-        self.lineEdit_min_yield_sample_size.setPlaceholderText("100")
-        gl.addWidget(self.lineEdit_min_yield_sample_size, 8, 1)
-        layout.addWidget(grp)
-        self.tabWidget.addTab(tab, "报警参数")
     
     def auto_run_test(self,detect_type=None):
         """当 Slider 数值变化时自动触发测试（仅在初始化完成后）"""
