@@ -42,7 +42,7 @@ class DryThread(QThread):
             "lot_id": "",
             "total_count": 0,
             "ng_count": 0,
-            "defect_counts": {"Mark": 0, "Size": 0, "Area": 0, "Ball Count": 0, "Scratch": 0, "Shift": 0}
+            "defect_counts": {"Mark": 0, "Size": 0, "Ball_Area": 0, "Ball Count": 0, "Scratch": 0, "Shift": 0}
         }
     
     #——————————————————————————————参数更新函数————————————————————————————————————————————————————————————————————
@@ -280,7 +280,7 @@ class DryThread(QThread):
                         "lot_id": lot,
                         "total_count": 0,
                         "ng_count": 0,
-                        "defect_counts": {"Mark": 0, "Size": 0, "Area": 0, "Ball Count": 0, "Scratch": 0, "Shift": 0}
+                        "defect_counts": {"Mark": 0, "Size": 0, "Ball_Area": 0, "Ball Count": 0, "Scratch": 0, "Shift": 0}
                     }
                     self._last_alarm_code = 0
             
@@ -351,13 +351,12 @@ class DryThread(QThread):
                 self.bga_strip.write(current_product_list,image)
                 stats_info = self.bga_strip.get_statistics_info()
                 
-                # NG 监控：检查告警并写入 Modbus 寄存器 3
+                # NG 监控：检查告警并写入 Modbus 寄存器 1（0=正常, 998=良率低, 999=不良超限）
                 ng_monitor = self.params.get("ng_monitor", {})
                 alarm_code = check_ng_alarm(stats_info, ng_monitor) if stats_info else 0
                 if alarm_code != self._last_alarm_code:
                     try:
-                        coil_val = 1 if alarm_code != 0 else 0
-                        ok, err = self.MM.write(alias="dry_modbus", address=3, value_list=[coil_val], function_code=cst.WRITE_SINGLE_COIL)
+                        ok, err = self.MM.write(alias="dry_modbus", address=1, value_list=[alarm_code], function_code=cst.WRITE_SINGLE_REGISTER)
                         if ok:
                             self._last_alarm_code = alarm_code
                         else:
@@ -389,7 +388,7 @@ class DryThread(QThread):
                     final_alarm = check_ng_alarm(stats_info, ng_monitor) if stats_info else 0
                     if final_alarm == 0 and self._last_alarm_code != 0:
                         try:
-                            self.MM.write(alias="dry_modbus", address=3, value_list=[0], function_code=cst.WRITE_SINGLE_COIL)
+                            self.MM.write(alias="dry_modbus", address=3, value_list=[0], function_code=cst.WRITE_SINGLE_REGISTER)
                             self._last_alarm_code = 0
                         except Exception as e:
                             print(f"NG监控 复位 Modbus 写入异常: {e}")
@@ -552,7 +551,7 @@ class DryThread(QThread):
             row_num = 1
             detection_type_map = {
                 "Size": "尺寸检测不良数",
-                "Area": "锡球面积检测不良数",
+                "Ball_Area": "锡球面积检测不良数",
                 "Ball Count": "锡球数量检测不良数",
                 "Mark": "Mark检测不良数",
                 "Scratch": "划痕检测不良数",
@@ -560,7 +559,7 @@ class DryThread(QThread):
             }
             detection_enable_map = {
                 "Size": self.params.get('size_check_enable', True) if hasattr(self, 'params') else True,
-                "Area": self.params.get('ball_check_enable', True) if hasattr(self, 'params') else True,
+                "Ball_Area": self.params.get('ball_check_enable', True) if hasattr(self, 'params') else True,
                 "Ball Count": self.params.get('ball_check_enable', True) if hasattr(self, 'params') else True,
                 "Mark": self.params.get('mark_check_enable', True) if hasattr(self, 'params') else True,
                 "Scratch": self.params.get('scratch_check_enable', True) if hasattr(self, 'params') else True,

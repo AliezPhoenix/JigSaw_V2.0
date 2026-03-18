@@ -62,7 +62,7 @@
       "defect_limits": {
         "Mark": 5,
         "Size": 3,
-        "Area": 10,
+        "Ball_Area": 10,
         "Ball Count": 3,
         "Scratch": 3,
         "Shift": 3
@@ -123,7 +123,7 @@
       "defect_limits": {
         "Mark": 5,
         "Size": 3,
-        "Area": 3,
+        "Ball_Area": 3,
         "Ball Count": 3,
         "Scratch": 3,
         "Shift": 3

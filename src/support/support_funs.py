@@ -218,15 +218,15 @@ class Bga_Strip():
                 full_slice[row, col] = 2  # OK - 绿色
             else:
                 # 根据不同的NG类型设置不同的值（按优先级）
-                # 优先级：Mark > Size > Ball Count > Area > Shift > 其他
+                # 优先级：Mark > Size > Ball Count > Ball_Area > Shift > 其他
                 if "Mark" in defect_type:
                     full_slice[row, col] = 1  # Mark - 红色
                 elif "Size" in defect_type:
                     full_slice[row, col] = 3  # Size - 紫色
                 elif "Ball Count" in defect_type:
                     full_slice[row, col] = 4  # BallCount - 橙色
-                elif "Ball" in defect_type:
-                    full_slice[row, col] = 5  # Area - 黄色
+                elif "Ball_Area" in defect_type:
+                    full_slice[row, col] = 5  # Ball_Area - 黄色
                 elif "Shift" in defect_type:
                     full_slice[row, col] = 6  # Shift - 棕色
                 elif "Scratch" in defect_type:
@@ -373,7 +373,7 @@ class Bga_Strip():
                 elif array[i, j] == 4:
                     color = (0, 165, 255)  # BallCount - 橙色
                 elif array[i, j] == 5:
-                    color = (0, 255, 255)  # Area - 黄色
+                    color = (0, 255, 255)  # Ball_Area - 黄色
                 elif array[i, j] == 6:
                     color = (42, 42, 165)  # Shift - 棕色
                 elif array[i,j] == 7:
@@ -416,8 +416,8 @@ class Bga_Strip():
             duration_seconds = (end_time - start_time).total_seconds() if start_time else None
             
             # 统计NG总数和各类型不良数
-            priority_map = {"Ball Count": 1, "Size": 2, "Area": 3, "Mark": 4, "Scratch": 5, "Shift": 6}
-            ng_count_by_type = {"Size": 0, "Area": 0, "Ball Count": 0, "Mark": 0, "Scratch": 0, "Shift": 0}
+            priority_map = {"Ball Count": 1, "Size": 2, "Ball_Area": 3, "Mark": 4, "Scratch": 5, "Shift": 6}
+            ng_count_by_type = {"Size": 0, "Ball_Area": 0, "Ball Count": 0, "Mark": 0, "Scratch": 0, "Shift": 0}
             ng_total_count = 0
             
             # 收集统计数据
@@ -431,7 +431,6 @@ class Bga_Strip():
                 
                 if is_ng:
                     ng_total_count += 1
-                    # 提取所有NG类型（defect_type中的所有元素都是NG类型）
                     ng_types = [t for t in defect_type if t in ng_count_by_type]
                     if ng_types:
                         # 按优先级统计，只统计优先级最高的类型
@@ -559,7 +558,7 @@ class Bga_Strip():
                 },
                 "defect_statistics": {
                     "Size": ng_count_by_type.get("Size", 0),
-                    "Area": ng_count_by_type.get("Area", 0),
+                    "Ball_Area": ng_count_by_type.get("Ball_Area", 0),
                     "Ball Count": ng_count_by_type.get("Ball Count", 0),
                     "Mark": ng_count_by_type.get("Mark", 0),
                     "Scratch": ng_count_by_type.get("Scratch", 0),
@@ -594,8 +593,8 @@ class Bga_Strip():
             accumulated_log_info = convert_numpy_obj(self.accumulated_log_info)
             
             # 统计NG总数和各类型不良数
-            priority_map = {"Ball Count": 1, "Size": 2, "Area": 3, "Mark": 4, "Scratch": 5, "Shift": 6}
-            ng_count_by_type = {"Size": 0, "Area": 0, "Ball Count": 0, "Mark": 0, "Scratch": 0, "Shift": 0}
+            priority_map = {"Ball Count": 1, "Size": 2, "Ball_Area": 3, "Mark": 4, "Scratch": 5, "Shift": 6}
+            ng_count_by_type = {"Size": 0, "Ball_Area": 0, "Ball Count": 0, "Mark": 0, "Scratch": 0, "Shift": 0}
             ng_total_count = 0
             total_count = len(accumulated_log_info)
             
@@ -622,7 +621,7 @@ class Bga_Strip():
                 "defect_counts": {
                     "Mark": ng_count_by_type.get("Mark", 0),
                     "Size": ng_count_by_type.get("Size", 0),
-                    "Area": ng_count_by_type.get("Area", 0),
+                    "Ball_Area": ng_count_by_type.get("Ball_Area", 0),
                     "Ball Count": ng_count_by_type.get("Ball Count", 0),
                     "Scratch": ng_count_by_type.get("Scratch", 0),
                     "Shift": ng_count_by_type.get("Shift", 0)
@@ -642,7 +641,7 @@ class Bga_Strip():
                 "defect_counts": {
                     "Mark": 0,
                     "Size": 0,
-                    "Area": 0,
+                    "Ball_Area": 0,
                     "Ball Count": 0,
                     "Scratch": 0,
                     "Shift": 0
@@ -1272,7 +1271,7 @@ def execute_product_detection(
             if ball_detect_result[2].get("ball_count", 0) != expected_count:
                 product_info["defect_type"].append("Ball Count")
             else:
-                product_info["defect_type"].append("Ball")
+                product_info["defect_type"].append("Ball_Area")
             
             # 如果启用提前返回，检测到NG时立即返回
             if early_return_on_ng:

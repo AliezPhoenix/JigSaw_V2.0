@@ -98,14 +98,14 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 'total_count': 0,
                 'ng_count': 0,
                 'yield_rate': 0.0,
-                'defect_counts': {'Mark': 0, 'Size': 0, 'Area': 0, 'Ball Count': 0, 'Scratch': 0, 'Shift': 0}
+                'defect_counts': {'Mark': 0, 'Size': 0, 'Ball_Area': 0, 'Ball Count': 0, 'Scratch': 0, 'Shift': 0}
             },
             '移栽台': {
                 'lot_id': '-',
                 'total_count': 0,
                 'ng_count': 0,
                 'yield_rate': 0.0,
-                'defect_counts': {'Mark': 0, 'Size': 0, 'Area': 0, 'Ball Count': 0, 'Scratch': 0, 'Shift': 0}
+                'defect_counts': {'Mark': 0, 'Size': 0, 'Ball_Area': 0, 'Ball Count': 0, 'Scratch': 0, 'Shift': 0}
             }
         }
         self._devices_connect(progress_callback=_report)
@@ -888,13 +888,13 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         current_lot_id = dry['lot_id'] if dry['lot_id'] not in ('-', '') else transfer['lot_id']
         self.label_statistics_lot_id.setText(f"lot_id: {current_lot_id}")
         tbl = self.tableWidget_statistics
-        # 行0: 总数, 1: NG数, 2: Mark, 3: Size, 4: Area, 5: Ball Count, 6: Scratch, 7: Shift, 8: 良率
+        # 行0: 总数, 1: NG数, 2: Mark, 3: Size, 4: Ball_Area, 5: Ball Count, 6: Scratch, 7: Shift, 8: 良率
         rows_data = [
             (dry['total_count'], transfer['total_count']),
             (dry['ng_count'], transfer['ng_count']),
             (dry['defect_counts'].get('Mark', 0), transfer['defect_counts'].get('Mark', 0)),
             (dry['defect_counts'].get('Size', 0), transfer['defect_counts'].get('Size', 0)),
-            (dry['defect_counts'].get('Area', 0), transfer['defect_counts'].get('Area', 0)),
+            (dry['defect_counts'].get('Ball_Area', 0), transfer['defect_counts'].get('Ball_Area', 0)),
             (dry['defect_counts'].get('Ball Count', 0), transfer['defect_counts'].get('Ball Count', 0)),
             (dry['defect_counts'].get('Scratch', 0), transfer['defect_counts'].get('Scratch', 0)),
             (dry['defect_counts'].get('Shift', 0), transfer['defect_counts'].get('Shift', 0)),

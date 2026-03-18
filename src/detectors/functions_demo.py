@@ -98,15 +98,15 @@ class bga_strip_log():
                 full_slice[row, col] = 2  # OK - 绿色
             else:
                 # 根据不同的NG类型设置不同的值（按优先级）
-                # 优先级：Mark > Size > Ball Count > Area > Shift > 其他
+                # 优先级：Mark > Size > Ball Count > Ball_Area > Shift > 其他
                 if "Mark" in defect_type:
                     full_slice[row, col] = 1  # Mark - 红色
                 elif "Size" in defect_type:
                     full_slice[row, col] = 3  # Size - 紫色
                 elif "Ball Count" in defect_type:
                     full_slice[row, col] = 4  # BallCount - 橙色
-                elif "Area" in defect_type:
-                    full_slice[row, col] = 5  # Area - 黄色
+                elif "Ball_Area" in defect_type:
+                    full_slice[row, col] = 5  # Ball_Area - 黄色
                 elif "Shift" in defect_type:
                     full_slice[row, col] = 6  # Shift - 棕色
                 else:
@@ -183,7 +183,7 @@ class bga_strip_log():
                 elif array[i, j] == 4:
                     color = (0, 165, 255)  # BallCount - 橙色
                 elif array[i, j] == 5:
-                    color = (0, 255, 255)  # Area - 黄色
+                    color = (0, 255, 255)  # Ball_Area - 黄色
                 elif array[i, j] == 6:
                     color = (42, 42, 165)  # Shift - 棕色
                 elif array[i, j] == 8:
@@ -1415,7 +1415,7 @@ def draw_detection_results(image_result, ok_balls, ng_balls, box_points,
         text = ("Size" if "Size" in defect_type else
                "Mark" if "Mark" in defect_type else 
                "Shift" if "Shift" in defect_type else 
-               "Scratch" if "Scratch" in defect_type else "Ball") if is_ng else "OK"
+               "Scratch" if "Scratch" in defect_type else "Ball_Area") if is_ng else "OK"
         color = color_red if is_ng else color_green
         cv.putText(image_result, text, center, cv.FONT_HERSHEY_SIMPLEX, 2, color, 2)
     

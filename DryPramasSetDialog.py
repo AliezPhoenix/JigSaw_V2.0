@@ -684,13 +684,14 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             defect_edit_map = [
                 ("Mark", "lineEdit_defect_limit_Mark", 5),
                 ("Size", "lineEdit_defect_limit_Size", 3),
-                ("Area", "lineEdit_defect_limit_Area", 3),
+                ("Ball_Area", "lineEdit_defect_limit_Area", 3),
                 ("Ball Count", "lineEdit_defect_limit_BallCount", 3),
                 ("Scratch", "lineEdit_defect_limit_Scratch", 3),
                 ("Shift", "lineEdit_defect_limit_Shift", 3),
             ]
             for key, attr, default in defect_edit_map:
-                getattr(self, attr).setText(str(limits.get(key, default)))
+                val = limits.get("Ball_Area", limits.get("Area", default)) if key == "Ball_Area" else limits.get(key, default)
+                getattr(self, attr).setText(str(val))
             self.lineEdit_min_yield_rate.setText(str(ng_monitor.get("min_yield_rate", 95.0)))
             self.lineEdit_min_yield_sample_size.setText(str(ng_monitor.get("min_yield_sample_size", 100)))
         except Exception as e:
@@ -774,7 +775,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             defect_edit_map = [
                 ("Mark", "lineEdit_defect_limit_Mark", 5),
                 ("Size", "lineEdit_defect_limit_Size", 3),
-                ("Area", "lineEdit_defect_limit_Area", 3),
+                ("Ball_Area", "lineEdit_defect_limit_Area", 3),
                 ("Ball Count", "lineEdit_defect_limit_BallCount", 3),
                 ("Scratch", "lineEdit_defect_limit_Scratch", 3),
                 ("Shift", "lineEdit_defect_limit_Shift", 3),

@@ -19,7 +19,7 @@ from src.support.support_funs import sanitize_filename_part
 # Excel 中检测类型标签到键名的反向映射
 LABEL_TO_DEFECT_KEY = {
     "尺寸检测不良数": "Size",
-    "锡球面积检测不良数": "Area",
+    "锡球面积检测不良数": "Ball_Area",
     "锡球数量检测不良数": "Ball Count",
     "Mark检测不良数": "Mark",
     "划痕检测不良数": "Scratch",
@@ -330,7 +330,7 @@ def merge_log_infos(log_info_list: list, station_filter: str = "all") -> dict:
     all_keys = set()
     for info in log_info_list:
         all_keys.update(info.get("defect_statistics", {}).keys())
-    defect_keys = ["Size", "Area", "Ball Count", "Mark", "Scratch", "Shift"]
+    defect_keys = ["Size", "Ball_Area", "Ball Count", "Mark", "Scratch", "Shift"]
     all_keys.update(defect_keys)
 
     merged_defect = {}
@@ -379,7 +379,7 @@ def write_log_to_excel(log_info: dict, filepath: str, detection_enable_map: dict
 
     detection_type_map = {
         "Size": "尺寸检测不良数",
-        "Area": "锡球面积检测不良数",
+        "Ball_Area": "锡球面积检测不良数",
         "Ball Count": "锡球数量检测不良数",
         "Mark": "Mark检测不良数",
         "Scratch": "划痕检测不良数",
