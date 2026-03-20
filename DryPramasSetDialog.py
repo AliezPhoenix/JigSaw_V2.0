@@ -10,7 +10,13 @@ from src.detectors.size_detector import SizeDetector
 from src.detectors.shift_detector import ShiftDetector
 from src.detectors.scratch_detector import ScratchDetector
 from src.config.config_manager import ConfigManager
-from src.support.support_funs import selectROI, draw_detection_results, execute_product_detection
+from src.support.support_funs import (
+    selectROI,
+    draw_detection_results,
+    execute_product_detection,
+    ensure_gray_u8,
+    ensure_bgr_u8,
+)
 
 class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
     def __init__(self,config_manager:'ConfigManager',parent=None):
@@ -160,6 +166,9 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             self.info_label.setText(f"已加载模板图像: {file_path}")
     
     def display_template_image(self, image):
+        if image is None:
+            return
+        image = ensure_bgr_u8(image, copy=True)
         height, width, channel = image.shape
         label = self.template_image_label
         bytes_per_line = 3 * width
@@ -194,9 +203,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         if self.template_image is None:
             return
         
-        display_image = self.template_image.copy()
-        if len(display_image.shape) == 2:
-            display_image = cv.cvtColor(display_image, cv.COLOR_GRAY2BGR)
+        display_image = ensure_bgr_u8(self.template_image, copy=True)
         
         # 绘制ROI屏蔽区域（黑色填充）
         roi_block = self.local_params.get("roi_block", [])
@@ -231,20 +238,12 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         if image is None:
             return
         
-        # 转换为 RGB
-        if len(image.shape) == 3:
-            rgb_image = cv.cvtColor(image, cv.COLOR_BGR2RGB)
-        else:
-            rgb_image = image
-        
+        bgr = ensure_bgr_u8(image, copy=True)
+        rgb_image = cv.cvtColor(bgr, cv.COLOR_BGR2RGB)
         h, w = rgb_image.shape[:2]
-        if len(rgb_image.shape) == 3:
-            channel = rgb_image.shape[2]
-            bytes_per_line = channel * w
-            q_img = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
-        else:
-            bytes_per_line = w
-            q_img = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_Grayscale8)
+        channel = rgb_image.shape[2]
+        bytes_per_line = channel * w
+        q_img = QImage(rgb_image.data, w, h, bytes_per_line, QImage.Format_RGB888)
         
         pixmap = QPixmap.fromImage(q_img)
         
@@ -466,11 +465,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 QMessageBox.warning(self, "错误", "锡球面积下限必须小于上限")
                 return
             
-            # 转换图像为灰度图
-            if len(self.template_image.shape) == 3:
-                template_gray = cv.cvtColor(self.template_image, cv.COLOR_BGR2GRAY)
-            else:
-                template_gray = self.template_image
+            template_gray = ensure_gray_u8(self.template_image, copy=True)
             
             # 构建检测器字典（与 main_window.template_validity_test 一致）
             detectors = {
@@ -524,7 +519,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             elif detect_type == "scratch":
                 image_binary = cv.inRange(template_gray,self.local_params["min_threshold_scratch"],self.local_params["max_threshold_scratch"])
 
-            image_binary = cv.cvtColor(image_binary, cv.COLOR_GRAY2BGR)
+            image_binary = ensure_bgr_u8(image_binary, copy=True)
             self.processed_image = np.vstack((image_binary, image_result))
             self.display_processed_image(self.processed_image)
             
@@ -830,10 +825,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             return
         
         # 准备显示图像
-        image = self.template_image.copy()
-        img_disp = image.copy()
-        if len(img_disp.shape) == 2:
-            img_disp = cv.cvtColor(img_disp, cv.COLOR_GRAY2BGR)
+        img_disp = ensure_bgr_u8(self.template_image, copy=True)
         
         try:
             # 根据detect_type设置窗口名称

@@ -297,7 +297,7 @@ class TransferThread(QThread):
                     self._update_message_signal.emit(f"采集图像失败: {msg}")
                     time.sleep(0.01)
                     continue
-                image_result = cv.cvtColor(image.copy(),cv.COLOR_GRAY2BGR)
+                image_result = ensure_bgr_u8(image, copy=True)
 
                 #——————————————————模板图像加载（使用缓存）————————————————————————————————————
                 template = self._get_template()
@@ -405,11 +405,11 @@ class TransferThread(QThread):
                 if not ((trigger_camera and not trigger_camera_last) or (trigger_finished and not trigger_finished_last)):
                     #——————————————————采集图像————————————————————
                     ret,msg, image_live = self.HM.capture_image("transfer_cam")
-                    h, w = image_live.shape[:2]
                     if not ret:
                         self._update_message_signal.emit(f"采集图像失败: {msg}")
                         continue
-                    image_live_bgr = cv.cvtColor(image_live.copy(), cv.COLOR_GRAY2BGR)
+                    h, w = image_live.shape[:2]
+                    image_live_bgr = ensure_bgr_u8(image_live, copy=True)
                     cv.line(image_live_bgr, (0, h // 2), (w, h // 2), (0, 255, 0), 2)
                     cv.line(image_live_bgr, (w // 2, 0), (w // 2, h), (0, 255, 0), 2)
                     self._update_image_signal.emit(image_live_bgr,None)

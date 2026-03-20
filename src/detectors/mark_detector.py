@@ -1,4 +1,5 @@
 from . import *
+from src.support.support_funs import ensure_gray_u8
 
 
 # ==================== MarkDetector 类 ====================
@@ -50,11 +51,7 @@ class MarkDetector:
                     - mark_area: float 标记区域面积（像素）
                     - mark_area_mm: float 标记区域面积（mm²）
         """
-        if len(image.shape) == 3:
-            image_gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-        else:
-            image_gray = image.copy()
-        
+        image_gray = ensure_gray_u8(image, copy=True)
         self.image = image_gray
 
         # 获取第一个ROI区域

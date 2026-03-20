@@ -1,7 +1,13 @@
 # 从共享导入文件导入所有需要的模块
 from src.threads.thread_imports import *
 import torch
-from src.support.support_funs import fulltray_load_model, fulltray_predict_single_image, hex_to_string
+from src.support.support_funs import (
+    fulltray_load_model,
+    fulltray_predict_single_image,
+    hex_to_string,
+    ensure_gray_u8,
+    ensure_bgr_u8,
+)
 
 
 class FulltrayThread(QThread):
@@ -143,12 +149,8 @@ class FulltrayThread(QThread):
         else:
             roi_image = image.copy()
 
-        try:
-            roi_gray = cv.cvtColor(roi_image, cv.COLOR_BGR2GRAY)
-        except Exception:
-            roi_gray = roi_image.copy()
-
-        result_image = cv.cvtColor(roi_gray, cv.COLOR_GRAY2BGR)
+        roi_gray = ensure_gray_u8(roi_image, copy=True)
+        result_image = ensure_bgr_u8(roi_gray, copy=True)
         roi_h, roi_w = roi_gray.shape
         cell_h = roi_h // rows
         cell_w = roi_w // cols
@@ -206,10 +208,7 @@ class FulltrayThread(QThread):
 
         if grid_roi is not None and len(grid_roi) >= 4:
             x, y, w, h = int(grid_roi[0]), int(grid_roi[1]), int(grid_roi[2]), int(grid_roi[3])
-            if len(image.shape) == 2:
-                image_result_full = cv.cvtColor(image, cv.COLOR_GRAY2BGR)
-            else:
-                image_result_full = image.copy()
+            image_result_full = ensure_bgr_u8(image, copy=True)
             image_result_full[y:y+h, x:x+w] = result_image
             result_image = image_result_full
 
@@ -220,8 +219,7 @@ class FulltrayThread(QThread):
         if image_result is None:
             return
         try:
-            if len(image_result.shape) == 2:
-                image_result = cv.cvtColor(image_result, cv.COLOR_GRAY2BGR)
+            image_result = ensure_bgr_u8(image_result, copy=True)
             self._update_image_signal.emit(image_result.copy())
         except Exception as e:
             print(f"满盘更新UI显示错误: {str(e)}")

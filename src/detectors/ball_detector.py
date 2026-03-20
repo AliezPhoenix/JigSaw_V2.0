@@ -1,4 +1,5 @@
 from . import *
+from src.support.support_funs import ensure_gray_u8
 
 
 # ==================== BallDetector 类 ====================
@@ -41,11 +42,7 @@ class BallDetector:
                 - ng_details: list 不合格球的详细信息列表
                 - avg_radius: float 平均半径（像素）
         """
-        if len(image.shape) == 3:
-            image_gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-        else:
-            image_gray = image.copy()
-        
+        image_gray = ensure_gray_u8(image, copy=True)
         self.image = image_gray
         
         # 获取参数

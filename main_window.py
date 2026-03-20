@@ -14,7 +14,16 @@ from PyQt5.QtGui import QPixmap, QImage, QBrush
 from PyQt5.QtCore import QFile, Qt, QSettings, QTimer
 from PyQt5.QtWidgets import QLabel, QApplication, QGraphicsScene, QTableWidgetItem, QHeaderView
 import numpy as np
-from src.support.support_funs import selectROI, execute_product_detection, draw_detection_results, fulltray_load_model, fulltray_predict_single_image, Bga_Strip
+from src.support.support_funs import (
+    selectROI,
+    execute_product_detection,
+    draw_detection_results,
+    fulltray_load_model,
+    fulltray_predict_single_image,
+    Bga_Strip,
+    ensure_gray_u8,
+    ensure_bgr_u8,
+)
 from src.support.InteractiveBgaLabel import InteractiveBgaLabel
 from src.detectors.ball_detector import BallDetector
 from src.detectors.size_detector import SizeDetector
@@ -131,7 +140,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.image_viewer_widget), "图像查看")
         
         # 延迟加载配方，确保窗口显示后 label 已获得正确尺寸，避免图像缩放异常
-        QTimer.singleShot(3000, self._load_last_config)
+        QTimer.singleShot(300, self._load_last_config)
 
         self.label_main_running_status.setText("待机")
         self.label_main_running_status.setStyleSheet(
@@ -140,7 +149,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         )
         _report(85, "初始化统计表格...")
         self._init_statistics_table()
-        _report(95, "启动完成")
+        _report(95, "加载配方")
         
     def _init_statistics_table(self):
         """初始化统计表格：设置表头、固定行标签、只读"""
@@ -246,6 +255,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             print(f"自动加载上次配方异常: {e}")
             traceback.print_exc()
         self.pushButton_start.setEnabled(True)
+    
     def _load_config_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "选择配置文件", "./config", "配置文件 (*.json)")
         if not file_path:
@@ -771,6 +781,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
     
         self.pushButton_start.setEnabled(False)
         self.pushButton_stop.setEnabled(True)
+    
     def stop(self):
         """停止所有线程"""
         if self.thread_manager is None:
@@ -849,8 +860,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                     print(f"吸嘴2显示错误: {e}")
 
     def _update_label_from_image(self,label:QLabel,image:np.ndarray):
-        if len(image.shape) == 2:
-            image = cv.cvtColor(image, cv.COLOR_GRAY2BGR)
+        image = ensure_bgr_u8(image, copy=True)
         height, width, channel = image.shape
         bytes_per_line = 3 * width
         # 将numpy数组转换为bytes（QImage需要bytes类型，不能直接使用memoryview）
@@ -973,8 +983,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                         current_image = (np.clip(current_image, 0, 1) * 255).astype(np.uint8)
                     else:
                         current_image = np.clip(current_image, 0, 255).astype(np.uint8)
-                if len(current_image.shape) == 2:
-                    current_image = cv.cvtColor(current_image, cv.COLOR_GRAY2BGR)
+                current_image = ensure_bgr_u8(current_image, copy=True)
                 self._update_label_from_image(label_name, current_image)
                 self.current_image[work_position] = current_image
                 self.template_validity_test(work_position)
@@ -1162,7 +1171,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             return
 
         template_h, template_w = template.shape[:2]
-        image_result = cv.cvtColor(image.copy(), cv.COLOR_GRAY2BGR) if len(image.shape) == 2 else image.copy()
+        image_result = ensure_bgr_u8(image, copy=True)
         detect_params = {
             "mark_check_enable": params.get("mark_check_enable", True),
             "size_check_enable": params.get("size_check_enable", True),
@@ -1214,7 +1223,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             return
         self.current_image[station] = image
         if station == "fulltray":
-            image_bgr = cv.cvtColor(image, cv.COLOR_GRAY2BGR) if len(image.shape) == 2 else image.copy()
+            image_bgr = ensure_bgr_u8(image, copy=True)
             self._update_label_from_image(self.label_image_show_fulltray, image_bgr)
             h, w = image_bgr.shape[:2]
             bytes_per_line = 3 * w
@@ -1240,7 +1249,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             x, y, w, h = roi
             self.config_manager.set_key(f"work_{station}_params", "search_roi", [x, y, w, h])
             # 在图像上绘制 ROI 范围并更新显示
-            display_image = cv.cvtColor(image.copy(), cv.COLOR_GRAY2BGR) if len(image.shape) == 2 else image.copy()
+            display_image = ensure_bgr_u8(image, copy=True)
             cv.putText(display_image, "Search ROI", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
             cv.rectangle(display_image, (x, y), (x + w, y + h), (255, 255, 0), 5)
             if station == "fulltray":
@@ -1317,11 +1326,8 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 roi_image = image[y:y+h, x:x+w]
             else:
                 roi_image = image.copy()
-            try:
-                roi_gray = cv.cvtColor(roi_image, cv.COLOR_BGR2GRAY)
-            except Exception:
-                roi_gray = roi_image.copy()
-            result_image = cv.cvtColor(roi_gray, cv.COLOR_GRAY2BGR)
+            roi_gray = ensure_gray_u8(roi_image, copy=True)
+            result_image = ensure_bgr_u8(roi_gray, copy=True)
             roi_h, roi_w = roi_gray.shape
             cell_h = roi_h // rows
             cell_w = roi_w // cols
@@ -1356,7 +1362,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                         result_matrix[i, j] = False
             if search_roi is not None and len(search_roi) >= 4:
                 x, y, w, h = int(search_roi[0]), int(search_roi[1]), int(search_roi[2]), int(search_roi[3])
-                image_result_full = cv.cvtColor(image, cv.COLOR_GRAY2BGR) if len(image.shape) == 2 else image.copy()
+                image_result_full = ensure_bgr_u8(image, copy=True)
                 image_result_full[y:y+h, x:x+w] = result_image
                 result_image = image_result_full
             is_ok = np.all(result_matrix)
@@ -1365,7 +1371,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             empty_count = total_cells - product_count
             avg_confidence = float(np.mean(confidence_matrix))
             # 更新显示
-            display_img = cv.cvtColor(result_image, cv.COLOR_GRAY2BGR) if len(result_image.shape) == 2 else result_image.copy()
+            display_img = ensure_bgr_u8(result_image, copy=True)
             self._update_label_from_image(self.label_image_show_fulltray, display_img)
             h, w = display_img.shape[:2]
             bytes_per_line = 3 * w

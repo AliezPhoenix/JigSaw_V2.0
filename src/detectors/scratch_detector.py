@@ -1,5 +1,5 @@
 from . import *
-from src.support.support_funs import mask_roi_regions
+from src.support.support_funs import mask_roi_regions, ensure_gray_u8
 
 
 class ScratchDetector:
@@ -48,11 +48,7 @@ class ScratchDetector:
                     - ng_scratch_contours: list NG的划痕轮廓列表，每个元素为numpy数组，用于绘制
         """
         try:
-            # 转换为灰度图像
-            if len(image.shape) == 3:
-                image_gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-            else:
-                image_gray = image.copy()
+            image_gray = ensure_gray_u8(image, copy=True)
             
             # 获取参数
             min_threshold = self.params.get('min_threshold', 0)

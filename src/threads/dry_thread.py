@@ -207,6 +207,7 @@ class DryThread(QThread):
             return False
         
         return True
+    
     def _check_modbus_data(self, discrete_inputs: list, input_registers: list) -> bool:
         """检查ModBus数据是否完整
         
@@ -224,6 +225,7 @@ class DryThread(QThread):
             return False
         
         return True
+    
     def _check_template_valid(self, template: np.ndarray) -> bool:
         """检查模板图像是否有效
         
@@ -298,12 +300,12 @@ class DryThread(QThread):
             if (trigger_camera and not trigger_camera_last) or (trigger_finished and not trigger_finished_last):
                 #——————————————————图像采集——————————————————————————————
                 ret,msg,image = self.HM.capture_image("dry_cam")
-                image = cv.rotate(image,cv.ROTATE_90_CLOCKWISE) ####干燥台相机旋转90度
                 if not ret or debug:
                     self._update_message_signal.emit(f"采集图像失败: {msg}")
                     time.sleep(0.01)
                     continue
-                image_result = cv.cvtColor(image.copy(),cv.COLOR_GRAY2BGR)
+                image = cv.rotate(image,cv.ROTATE_90_CLOCKWISE) ####干燥台相机旋转90度
+                image_result = ensure_bgr_u8(image, copy=True)
 
                 #——————————————————模板图像加载（使用缓存）————————————————————————————————————
                 template = self._get_template()
@@ -411,12 +413,12 @@ class DryThread(QThread):
                 if not ((trigger_camera and not trigger_camera_last) or (trigger_finished and not trigger_finished_last)):
                     #——————————————————采集图像————————————————————
                     ret,msg, image_live = self.HM.capture_image("dry_cam")
-                    h, w = image_live.shape[:2]
                     if not ret:
                         self._update_message_signal.emit(f"采集图像失败: {msg}")
                         continue
+                    h, w = image_live.shape[:2]
                     
-                    image_live_bgr = cv.cvtColor(image_live.copy(), cv.COLOR_GRAY2BGR)
+                    image_live_bgr = ensure_bgr_u8(image_live, copy=True)
                     image_live_bgr = cv.rotate(image_live_bgr, cv.ROTATE_90_CLOCKWISE)
                     cv.line(image_live_bgr, (0, h // 2), (w, h // 2), (0, 255, 0), 2)
                     cv.line(image_live_bgr, (w // 2, 0), (w // 2, h), (0, 255, 0), 2)

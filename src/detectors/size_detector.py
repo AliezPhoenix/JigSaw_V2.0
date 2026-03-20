@@ -1,4 +1,5 @@
 from . import *
+from src.support.support_funs import ensure_gray_u8
 
 
 # ==================== 辅助函数 ====================
@@ -141,11 +142,7 @@ class SizeDetector:
                 - height: float 产品高度（mm）
         """
 
-        if len(image.shape) == 3:
-            image_gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-        else:
-            image_gray = image.copy()
-        
+        image_gray = ensure_gray_u8(image, copy=True)
         self.image = image_gray
         h, w = image_gray.shape
         

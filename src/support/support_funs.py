@@ -3,7 +3,6 @@ import numpy as np
 import cv2 as cv
 import datetime
 from datetime import datetime as dt
-from src.detectors.functions_demo import convert_numpy_obj, calculate_cpk
 
 # 满盘检测深度学习依赖（程序启动时预加载）
 import torch
@@ -13,11 +12,113 @@ from torchvision import transforms as torch_transforms
 from PIL import Image as PILImage
 
 
+def convert_numpy_obj(obj):
+    """
+    将 numpy 对象转换为 Python 原生类型，用于序列化。
+
+    Args:
+        obj: 可能为 numpy 标量/数组、列表、字典等
+
+    Returns:
+        可 JSON/Excel 序列化的原生类型
+    """
+    if isinstance(obj, (np.integer, np.int64, np.int32, np.int16, np.int8)):
+        return int(obj)
+    if isinstance(obj, (np.floating, np.float64, np.float32, np.float16)):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (tuple, list)):
+        return [convert_numpy_obj(item) for item in obj]
+    if isinstance(obj, dict):
+        return {key: convert_numpy_obj(value) for key, value in obj.items()}
+    return obj
+
+
+def calculate_cpk(data_list, usl, lsl):
+    """
+    计算 CPK（过程能力指数）。
+    Cpu = (USL - μ) / (3σ)，Cpl = (μ - LSL) / (3σ)；双侧均存在时返回 max(cpu, cpl)。
+
+    Args:
+        data_list: 数据列表
+        usl: 上规格限
+        lsl: 下规格限
+
+    Returns:
+        CPK 值（float）或 None（无法计算）
+    """
+    if not data_list or len(data_list) < 2:
+        return None
+    try:
+        mean = np.mean(data_list)
+        std = np.std(data_list, ddof=1)
+        if std == 0:
+            return None
+        cpu = (usl - mean) / (3 * std) if usl is not None else None
+        cpl = (mean - lsl) / (3 * std) if lsl is not None else None
+        if cpu is not None and cpl is not None:
+            return max(cpu, cpl)
+        if cpu is not None:
+            return cpu
+        if cpl is not None:
+            return cpl
+        return None
+    except Exception:
+        return None
+
+
 def sanitize_filename_part(s: str) -> str:
     """移除路径遍历危险字符，仅保留安全字符用于文件名（防止 Modbus 数据注入）"""
     s = str(s).strip()
     s = re.sub(r'[^\w\-.]', '_', s)  # 只保留字母数字下划线横线点
     return s[:64] if s else "unknown"
+
+
+def ensure_gray_u8(image: np.ndarray, *, copy: bool = True) -> np.ndarray:
+    """
+    将常见格式的图像 ndarray 转为单通道灰度 (H, W)，uint8。
+    支持 2D 灰度、(H,W,1)、BGR、BGRA；通道数异常时取第 0 平面。
+    避免对 (H,W,1) 误用 COLOR_BGR2GRAY 导致 OpenCV scn/bad channel 报错。
+    """
+    if image is None:
+        raise TypeError("ensure_gray_u8: image is None")
+    if image.ndim == 2:
+        return image.copy() if copy else np.ascontiguousarray(image)
+    if image.ndim != 3:
+        raise ValueError(f"ensure_gray_u8: unsupported ndim={image.ndim}, shape={getattr(image, 'shape', None)}")
+    c = image.shape[2]
+    if c == 1:
+        g = np.squeeze(image, axis=2)
+        return g.copy() if copy else np.ascontiguousarray(g)
+    if c == 3:
+        return cv.cvtColor(image, cv.COLOR_BGR2GRAY)
+    if c == 4:
+        return cv.cvtColor(image, cv.COLOR_BGRA2GRAY)
+    g = np.ascontiguousarray(image[:, :, 0])
+    return g.copy() if copy else g
+
+
+def ensure_bgr_u8(image: np.ndarray, *, copy: bool = True) -> np.ndarray:
+    """
+    将输入转为 3 通道 BGR (H, W, 3)，供绘制、叠加与 Qt 显示。
+    支持 2D 灰度、(H,W,1)、BGR、BGRA。
+    """
+    if image is None:
+        raise TypeError("ensure_bgr_u8: image is None")
+    if image.ndim == 2:
+        return cv.cvtColor(image, cv.COLOR_GRAY2BGR)
+    if image.ndim != 3:
+        raise ValueError(f"ensure_bgr_u8: unsupported ndim={image.ndim}, shape={getattr(image, 'shape', None)}")
+    c = image.shape[2]
+    if c == 1:
+        g = np.squeeze(image, axis=2)
+        return cv.cvtColor(g, cv.COLOR_GRAY2BGR)
+    if c == 3:
+        return image.copy() if copy else np.ascontiguousarray(image)
+    if c == 4:
+        return cv.cvtColor(image, cv.COLOR_BGRA2BGR)
+    return cv.cvtColor(np.ascontiguousarray(image[:, :, 0]), cv.COLOR_GRAY2BGR)
 
 
 def create_alternating_array(rows, cols, start_element, values=(0, 3)):
@@ -771,9 +872,8 @@ def selectROI(window_name, image, showCrosshair=True, fromCenter=False,
     display_image = current_image.copy()
     
     # 确保图像是3通道的（用于绘制彩色矩形）
-    if len(display_image.shape) == 2:
-        display_image = cv.cvtColor(display_image, cv.COLOR_GRAY2BGR)
-        current_image = display_image.copy()
+    display_image = ensure_bgr_u8(display_image, copy=True)
+    current_image = display_image.copy()
     
     def mouse_callback(event, x, y, flags, param):
         nonlocal drawing, start_point, end_point, display_image, current_image
@@ -906,11 +1006,7 @@ def draw_detection_results(image_result: np.ndarray, product_info: dict,
     
     # 确保图像是BGR格式
     try:
-        image_result = image_result.copy()
-        if len(image_result.shape) == 2:
-            image_result = cv.cvtColor(image_result, cv.COLOR_GRAY2BGR)
-        elif len(image_result.shape) == 3 and image_result.shape[2] != 3:
-            image_result = cv.cvtColor(image_result, cv.COLOR_GRAY2BGR)
+        image_result = ensure_bgr_u8(image_result, copy=True)
     except Exception as e:
         error_msg = f"图像格式转换错误: {e}"
         error_messages.append(error_msg)
@@ -1417,10 +1513,7 @@ def fulltray_predict_single_image(model, image_input, device='cpu', input_size=1
         if img is None:
             raise ValueError(f"无法读取图像: {image_input}")
     elif isinstance(image_input, np.ndarray):
-        if len(image_input.shape) == 3:
-            img = cv.cvtColor(image_input, cv.COLOR_BGR2GRAY)
-        else:
-            img = image_input.copy()
+        img = ensure_gray_u8(image_input, copy=True)
     else:
         raise ValueError(f"不支持的图像输入类型: {type(image_input)}")
 

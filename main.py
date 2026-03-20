@@ -22,12 +22,13 @@ if __name__ == "__main__":
         splash.update_progress(percent, message)
 
     ui = MainWindow(progress_callback=on_progress)
-    splash.update_progress(100, "启动完成")
+    
     QApplication.processEvents()
-    splash.close()
-
+    
     ui.showFullScreen()
     ui._init_all_tabs()
+    splash.update_progress(100, "启动完成")
+    splash.close()
     QApplication.processEvents()
     sys.exit(app.exec_())
 

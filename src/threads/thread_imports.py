@@ -37,6 +37,15 @@ from src.detectors.template_detector import TemplateDetector
 from src.detectors.shift_detector import ShiftDetector
 from src.detectors.mark_detector import MarkDetector
 from src.detectors.scratch_detector import ScratchDetector
-from src.support.support_funs import Bga_Strip, hex_to_string, value_transmit, draw_detection_results, execute_product_detection, sanitize_filename_part
+from src.support.support_funs import (
+    Bga_Strip,
+    hex_to_string,
+    value_transmit,
+    draw_detection_results,
+    execute_product_detection,
+    sanitize_filename_part,
+    ensure_gray_u8,
+    ensure_bgr_u8,
+)
 from src.support.ng_monitor import check_ng_alarm
 import typing

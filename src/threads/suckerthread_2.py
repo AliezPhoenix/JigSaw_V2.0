@@ -6,10 +6,7 @@ def _draw_result_on_image(image, result_dict):
     """在图像上绘制检测结果（矩形和十字线）"""
     if image is None:
         return None
-    img = image.copy()
-    if len(img.shape) == 2:
-        
-        img = cv.cvtColor(img, cv.COLOR_GRAY2BGR)
+    img = ensure_bgr_u8(image, copy=True)
     h, w = img.shape[:2]
     center_x, center_y = w // 2, h // 2
 
@@ -106,7 +103,7 @@ class SuckerThread2(QThread):
             if trigger == 1 and trigger_last == 0:
                 start_time = time.time()
                 if hasattr(self.ui, "radio_picturing_mode") and self.ui.radio_picturing_mode.isChecked():
-                    image_result = image.copy() if len(image.shape) == 3 else cv.cvtColor(image, cv.COLOR_GRAY2BGR)
+                    image_result = ensure_bgr_u8(image, copy=True)
                     result = (0, 0, 0, 0)
                 elif hasattr(self.ui, "radio_detecting_mode") and self.ui.radio_detecting_mode.isChecked():
                     detect_mode = "product" if mode == 0 else "sucker"
@@ -123,9 +120,9 @@ class SuckerThread2(QThread):
                         result = (0, 0, 0, 0)
                         image_result = _draw_result_on_image(image, result_dict or {})
                     if image_result is None:
-                        image_result = image.copy() if len(image.shape) == 3 else cv.cvtColor(image, cv.COLOR_GRAY2BGR)
+                        image_result = ensure_bgr_u8(image, copy=True)
                 else:
-                    image_result = image.copy() if len(image.shape) == 3 else cv.cvtColor(image, cv.COLOR_GRAY2BGR)
+                    image_result = ensure_bgr_u8(image, copy=True)
                     result = (0, 0, 0, 0)
 
                 # 写 Modbus 寄存器
@@ -139,11 +136,7 @@ class SuckerThread2(QThread):
 
                 # 发射图像信号（Bga 为 None，图像需为 BGR 格式）
                 if image_result is not None:
-                    if len(image_result.shape) == 2:
-                        img_bgr = cv.cvtColor(image_result, cv.COLOR_GRAY2BGR)
-                    else:
-                        img_bgr = image_result
-                    self._update_image_signal.emit(img_bgr, None)
+                    self._update_image_signal.emit(ensure_bgr_u8(image_result, copy=True), None)
 
                 print(f"SuckerThread2 cycle time: {(time.time() - start_time) * 1000:.1f} ms")
             elif trigger == 0 and trigger_last == 0:
@@ -155,8 +148,7 @@ class SuckerThread2(QThread):
             # 实时显示（带辅助线）- 使用线程安全标志，禁止在工作线程中访问 UI
             if image is not None and self.live_display_enabled:
                 h, w = image.shape[:2]
-                img_live = image.copy()
-                img_live = cv.cvtColor(img_live, cv.COLOR_GRAY2BGR)
+                img_live = ensure_bgr_u8(image, copy=True)
                 cv.line(img_live, (0, h // 2), (w, h // 2), (0, 255, 0), 2)
                 cv.line(img_live, (w // 2, 0), (w // 2, h), (0, 255, 0), 2)
 

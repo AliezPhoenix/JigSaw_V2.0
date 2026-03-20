@@ -1,5 +1,6 @@
 import cv2 as cv
 import numpy as np
+from src.support.support_funs import ensure_gray_u8
 
 
 class SuckerDetector:
@@ -50,11 +51,7 @@ class SuckerDetector:
                     - sucker_box_point: tuple 吸嘴边界框 (x, y, w, h) 或 None
                     - product_box_point: tuple 产品边界框 (x, y, w, h) 或 None
         """
-        # 转换为灰度图像
-        if len(image.shape) == 3:
-            image_gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-        else:
-            image_gray = image.copy()
+        image_gray = ensure_gray_u8(image, copy=True)
         
         if mode == "sucker":
             return self._detect_sucker(image_gray)

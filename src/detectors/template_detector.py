@@ -1,4 +1,5 @@
 from . import *
+from src.support.support_funs import ensure_gray_u8
 
 class TemplateDetector:
     def __init__(self):
@@ -15,7 +16,12 @@ class TemplateDetector:
         params = self.params
         threshold = params.get("template_threshold", 0.6)
         search_roi = params.get("search_roi", None)
-        x,y,w,h  = search_roi
+        img_h, img_w = image.shape[:2]
+        if search_roi and isinstance(search_roi, (list, tuple)) and len(search_roi) >= 4:
+            x, y, w, h = int(search_roi[0]), int(search_roi[1]), int(search_roi[2]), int(search_roi[3])
+        else:
+            x, y, w, h = 0, 0, img_w, img_h
+        roi_origin_x, roi_origin_y = x, y
         self.template = template
         self.image = image[y:y+h,x:x+w]
         match_points = []
@@ -23,10 +29,8 @@ class TemplateDetector:
         template_width = self.template.shape[1]
         template_height = self.template.shape[0]
 
-        if len(self.template.shape) == 3:
-            self.template = cv.cvtColor(self.template, cv.COLOR_BGR2GRAY)
-        if len(self.image.shape) == 3:
-            self.image = cv.cvtColor(self.image, cv.COLOR_BGR2GRAY)
+        self.template = ensure_gray_u8(self.template, copy=True)
+        self.image = ensure_gray_u8(self.image, copy=True)
 
         self.template = cv.GaussianBlur(self.template, (5, 5), 0)
         self.image = cv.GaussianBlur(self.image, (5, 5), 0)
@@ -55,10 +59,8 @@ class TemplateDetector:
         y_tolerance = template_height/2
         result_list.sort(key=lambda pt: (int(pt[1] / y_tolerance) if y_tolerance > 0 else int(pt[1]), pt[0]))
 
-        # 将坐标转换为原始图像坐标（加上search_roi的偏移量）
-        if search_roi:
-            roi_x, roi_y = search_roi[0], search_roi[1]
-            result_list = [(x + roi_x, y + roi_y) for x, y in result_list]
+        # 将坐标转换为原始图像坐标（加上裁剪区域左上角偏移；循环内会覆盖 x,y，故用 roi_origin_*）
+        result_list = [(px + roi_origin_x, py + roi_origin_y) for px, py in result_list]
 
         return result_list
 
