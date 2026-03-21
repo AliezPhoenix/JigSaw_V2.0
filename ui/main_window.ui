@@ -2521,7 +2521,7 @@
                </widget>
               </item>
               <item row="2" column="1">
-               <widget class="QLineEdit" name="lineEdit_transfer_Gamma">
+               <widget class="QLineEdit" name="lineEdit_Gamma_transfer">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                   <horstretch>0</horstretch>
@@ -2550,7 +2550,7 @@
                </widget>
               </item>
               <item row="4" column="1">
-               <widget class="QLineEdit" name="lineEdit_transfer_Gain">
+               <widget class="QLineEdit" name="lineEdit_Gain_transfer">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                   <horstretch>0</horstretch>
@@ -2569,7 +2569,7 @@
                </widget>
               </item>
               <item row="3" column="1">
-               <widget class="QLineEdit" name="lineEdit_transfer_AcquisitionFrameRate">
+               <widget class="QLineEdit" name="lineEdit_AcquisitionFrameRate_transfer">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                   <horstretch>0</horstretch>
@@ -2605,7 +2605,7 @@
                </widget>
               </item>
               <item row="1" column="1">
-               <widget class="QLineEdit" name="lineEdit_transfer_ExposureTime">
+               <widget class="QLineEdit" name="lineEdit_ExposureTime_transfer">
                 <property name="sizePolicy">
                  <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
                   <horstretch>0</horstretch>

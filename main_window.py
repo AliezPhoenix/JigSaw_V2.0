@@ -667,14 +667,23 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             except Exception as e:
                 QMessageBox.warning(self, "错误", f"设置{hardware_alias}相机参数失败：{str(e)}")
 
-        if action == "capture one frame":
+        if action == "capture_one_frame":
             success, msg, image = self.hardware_manager.capture_image(hardware_alias)
             if not success:
                 QMessageBox.warning(self, "警告", f"拍照{hardware_alias}失败: {msg}")
             else:
-                label = getattr(self, f"label_current_cam_live_{hardware_alias.split('_')[0]}")
-                self._update_label_from_image(label, image)
-                self.current_image[hardware_alias.split('_')[0]] = image
+                prefix = hardware_alias.split("_")[0]
+                image_bgr = ensure_bgr_u8(image, copy=True)
+                if prefix == "fulltray":
+                    self._update_fulltray_graphics_view_from_image(image_bgr)
+                elif prefix == "sucker1":
+                    self._update_label_from_image(self.label_sucker1_cam_live, image_bgr)
+                elif prefix == "sucker2":
+                    self._update_label_from_image(self.label_sucker2_cam_live, image_bgr)
+                else:
+                    label = getattr(self, f"label_current_cam_live_{prefix}")
+                    self._update_label_from_image(label, image_bgr)
+                self.current_image[prefix] = image_bgr
                 QApplication.processEvents()
     # =============================================================================
     # 5. 线程控制
@@ -806,20 +815,24 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
     # 6. 显示更新
     # =============================================================================
 
+    def _update_fulltray_graphics_view_from_image(self, image: np.ndarray):
+        """满盘检测图像仅显示在 graphicsView_fulltray_cam_live。"""
+        image = ensure_bgr_u8(image, copy=True)
+        h, w = image.shape[:2]
+        bytes_per_line = 3 * w
+        q_image = QImage(image.tobytes(), w, h, bytes_per_line, QImage.Format_BGR888)
+        pixmap = QPixmap.fromImage(q_image)
+        scene = QGraphicsScene()
+        scene.addPixmap(pixmap)
+        self.graphicsView_fulltray_cam_live.setScene(scene)
+        self.graphicsView_fulltray_cam_live.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+
     def _update_display(self, station, image, bga_strip:Bga_Strip=None):
         """各工位图像显示，统一入口"""
         if station == "fulltray":
             if image is not None and isinstance(image, np.ndarray):
                 try:
-                    self._update_label_from_image(self.label_image_show_fulltray, image)
-                    h, w = image.shape[:2]
-                    bytes_per_line = 3 * w
-                    q_image = QImage(image.tobytes(), w, h, bytes_per_line, QImage.Format_BGR888)
-                    pixmap = QPixmap.fromImage(q_image)
-                    scene = QGraphicsScene()
-                    scene.addPixmap(pixmap)
-                    self.graphicsView_fulltray_cam_live.setScene(scene)
-                    self.graphicsView_fulltray_cam_live.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+                    self._update_fulltray_graphics_view_from_image(image)
                 except Exception as e:
                     print(f"满盘显示错误: {e}")
         elif station == "dry":
@@ -1048,7 +1061,12 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         QMessageBox.information(self,"提示","模板已成功加载✅")
 
     def create_new_tmepalte(self,station):
-        image = self.current_image[station].copy()
+        image = self.current_image.get(station)
+        if image is None:
+            QMessageBox.warning(self, "错误", "请先选择当前图像❌")
+            return
+        image = ensure_bgr_u8(image, copy=True)
+
         cv.namedWindow("Create New Template", cv.WINDOW_NORMAL)
         roi = selectROI("Create New Template", image, showCrosshair=True, fromCenter=False, rect_color=(0,255,0), line_thickness=5)
         if roi is not None:
@@ -1223,16 +1241,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             return
         self.current_image[station] = image
         if station == "fulltray":
-            image_bgr = ensure_bgr_u8(image, copy=True)
-            self._update_label_from_image(self.label_image_show_fulltray, image_bgr)
-            h, w = image_bgr.shape[:2]
-            bytes_per_line = 3 * w
-            q_image = QImage(image_bgr.tobytes(), w, h, bytes_per_line, QImage.Format_BGR888)
-            pixmap = QPixmap.fromImage(q_image)
-            scene = QGraphicsScene()
-            scene.addPixmap(pixmap)
-            self.graphicsView_fulltray_cam_live.setScene(scene)
-            self.graphicsView_fulltray_cam_live.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+            self._update_fulltray_graphics_view_from_image(image)
         else:
             self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), image)
 
@@ -1253,15 +1262,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             cv.putText(display_image, "Search ROI", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
             cv.rectangle(display_image, (x, y), (x + w, y + h), (255, 255, 0), 5)
             if station == "fulltray":
-                self._update_label_from_image(self.label_image_show_fulltray, display_image)
-                h, w = display_image.shape[:2]
-                bytes_per_line = 3 * w
-                q_image = QImage(display_image.tobytes(), w, h, bytes_per_line, QImage.Format_BGR888)
-                pixmap = QPixmap.fromImage(q_image)
-                scene = QGraphicsScene()
-                scene.addPixmap(pixmap)
-                self.graphicsView_fulltray_cam_live.setScene(scene)
-                self.graphicsView_fulltray_cam_live.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+                self._update_fulltray_graphics_view_from_image(display_image)
             else:
                 self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), display_image)
             QMessageBox.information(self, "提示", f"Search ROI 已保存 ✅\n区域: ({x}, {y}) 宽{w} 高{h}")
@@ -1372,15 +1373,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             avg_confidence = float(np.mean(confidence_matrix))
             # 更新显示
             display_img = ensure_bgr_u8(result_image, copy=True)
-            self._update_label_from_image(self.label_image_show_fulltray, display_img)
-            h, w = display_img.shape[:2]
-            bytes_per_line = 3 * w
-            q_image = QImage(display_img.tobytes(), w, h, bytes_per_line, QImage.Format_BGR888)
-            pixmap = QPixmap.fromImage(q_image)
-            scene = QGraphicsScene()
-            scene.addPixmap(pixmap)
-            self.graphicsView_fulltray_cam_live.setScene(scene)
-            self.graphicsView_fulltray_cam_live.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+            self._update_fulltray_graphics_view_from_image(display_img)
             self._update_fulltray_result(is_ok, product_count, total_cells, empty_count, avg_confidence)
             QMessageBox.information(self, "提示", f"检测完成: {'OK' if is_ok else 'NG'} | {product_count}/{total_cells} | 置信度 {avg_confidence:.2%}")
         except Exception as e:
