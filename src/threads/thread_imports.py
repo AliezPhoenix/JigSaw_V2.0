@@ -39,6 +39,7 @@ from src.detectors.mark_detector import MarkDetector
 from src.detectors.scratch_detector import ScratchDetector
 from src.support.support_funs import (
     Bga_Strip,
+    assign_matches_to_grid,
     hex_to_string,
     value_transmit,
     draw_detection_results,

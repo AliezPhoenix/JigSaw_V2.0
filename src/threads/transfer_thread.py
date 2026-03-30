@@ -18,7 +18,17 @@ class TransferThread(QThread):
         self.mark_detector = MarkDetector() ##标记检测器
         self.scratch_detector = ScratchDetector() ##划痕检测器
         self.template_detector = TemplateDetector() ##模板检测器
-        self.bga_strip = Bga_Strip(station="transfer",strip_side="",strip_lot="",strip_sn="",strip_create_time="",params=params)
+        # 与 JIGSAW_Rebuild WorkThread：循环前 side='front'，Modbus 选址与 bga 均依 current_side（同 dry_thread）
+        self.bga_strip = Bga_Strip(
+            station="transfer",
+            strip_side="front",
+            strip_lot="",
+            strip_sn="",
+            strip_create_time="",
+            params=params,
+        )
+        self.current_side = "front"
+        self.workflow_start_time = None
         # 模板缓存（必须在 update_params 之前初始化，因为 update_params 会访问 _template_path）
         self._template = None
         self._template_path = None
@@ -157,7 +167,7 @@ class TransferThread(QThread):
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         lot_id = sanitize_filename_part(self.bga_strip.strip_lot if hasattr(self.bga_strip, 'strip_lot') else "LOT")
         sn_id = sanitize_filename_part(self.bga_strip.strip_sn if hasattr(self.bga_strip, 'strip_sn') else "SN")
-        side = self.bga_strip.strip_side if hasattr(self.bga_strip, 'strip_side') else "front"
+        side = self.current_side
         
         save_dir = "Image/Data_Save_Transfer"
         if not os.path.exists(save_dir):
@@ -245,6 +255,7 @@ class TransferThread(QThread):
     def run(self):
         trigger_camera_last = 0
         trigger_finished_last = 0
+        self.current_side = "front"
         while not self.isInterruptionRequested():
             # 检查暂停状态
             if self.is_paused:
@@ -265,10 +276,11 @@ class TransferThread(QThread):
             mode, trigger_count, sector_change_flag = input_register_list
 
                         
-            #——————————————————————根具正反初始化bga_strip对象————————————————————————————————————
-            if trigger_count  == 1:
-                lot = hex_to_string(self.MM.read("transfer_modbus",address=16,count=10,function_code=cst.READ_INPUT_REGISTERS)[1])
-                sn =hex_to_string(self.MM.read("transfer_modbus",address=26,count=10,function_code=cst.READ_INPUT_REGISTERS)[1])
+            #——————————————————————根据正反初始化 bga_strip（对齐 JIGSAW_Rebuild Threads.py WorkThread 移栽：lot/sn 寄存器 8/18）————————————————————————————————————
+            if trigger_count == 1:
+                self.workflow_start_time = datetime.now()
+                lot = hex_to_string(self.MM.read("transfer_modbus", address=8, count=10, function_code=cst.READ_INPUT_REGISTERS)[1])
+                sn = hex_to_string(self.MM.read("transfer_modbus", address=18, count=10, function_code=cst.READ_INPUT_REGISTERS)[1])
                 # lot_id 变化时重置 lot 级统计与告警状态
                 if lot != self._lot_stats.get("lot_id", ""):
                     self._lot_stats = {
@@ -278,15 +290,28 @@ class TransferThread(QThread):
                         "defect_counts": {"Mark": 0, "Size": 0, "Ball_Area": 0, "Ball Count": 0, "Scratch": 0, "Shift": 0}
                     }
                     self._last_alarm_code = 0
-            
-                self.bga_strip = Bga_Strip(
-                    station="transfer",
-                    strip_side= "front" if trigger_front == 1 else "back",
-                    strip_lot=lot,
-                    strip_sn=sn,
-                    strip_create_time=datetime.now().strftime("%Y%m%d%H%M%S"),
-                    params=self.params
-                )   
+
+                # 与 Rebuild：仅 trigger_front XOR trigger_back 时新建对应 BGA 并更新 side；否则保持 bga_strip 与 current_side
+                if trigger_front and not trigger_back:
+                    self.bga_strip = Bga_Strip(
+                        station="transfer",
+                        strip_side="front",
+                        strip_lot=lot,
+                        strip_sn=sn,
+                        strip_create_time=datetime.now().strftime("%Y%m%d%H%M%S"),
+                        params=self.params,
+                    )
+                    self.current_side = "front"
+                elif trigger_back and not trigger_front:
+                    self.bga_strip = Bga_Strip(
+                        station="transfer",
+                        strip_side="back",
+                        strip_lot=lot,
+                        strip_sn=sn,
+                        strip_create_time=datetime.now().strftime("%Y%m%d%H%M%S"),
+                        params=self.params,
+                    )
+                    self.current_side = "back"
 
 
             #——————————————————————检测触发————————————————————————————————
@@ -311,44 +336,114 @@ class TransferThread(QThread):
                 template_height = template.shape[0]
                 template_width = template.shape[1]
 
-                #————————————————————检测流程————————————————————————————————————
-                image_blur = cv.blur(image,(3,3)) #### 移栽台塑封装面模糊以提高匹配精度
-                template_pos_list = self.template_detector.detect(template,image_blur)
-                current_product_list = []
-                for x,y in template_pos_list:
-                    # 边界检查：产品图像提取位置
-                    if not self._check_image_bounds(image, x, y, template_width, template_height):
-                        self._update_message_signal.emit(f"警告: 模板位置 ({x}, {y}) 超出图像边界 ({image.shape[1]}, {image.shape[0]})")
-                        time.sleep(0.01)
-                        continue
-                    
-                    product_image = image[y:y+template_height,x:x+template_width]
-                    success, msg, product_info = self._detect_product(x,y,product_image)
-                    if not success:
-                        filepath_result = self._generate_image_filename("ERROR")
-                        filepath_ori = self._generate_image_filename("ORI")
-                        self._async_save_image(product_info["product_image_result"], filepath_result)
-                        self._async_save_image(product_image, filepath_ori)
-                    #——————————————————如果是NG产品，异步保存图像（同时保存原图和检测结果图）————————————————————————————————————
-                    if "OK" not in product_info["defect_type"]:
-                        defect_type = product_info["defect_type"][0] if len(product_info["defect_type"]) > 1 else "UNKNOWN"
-                        filepath_result = self._generate_image_filename(defect_type)
-                        filepath_ori = self._generate_image_filename("ORI")
-                        self._async_save_image(product_info["product_image_result"], filepath_result)
-                        self._async_save_image(product_image, filepath_ori)
-                    
-                   
-                    current_product_list.append(product_info)
-                    image_result[y:y+template_height,x:x+template_width] = product_info["product_image_result"]
+                #————————————————————检测流程（模板匹配按 current_row×current_col 网格落位）————————————————————————————————————
+                image_blur = cv.blur(image, (3, 3))  # 移栽台模糊以提高匹配精度
+                template_matches = self.template_detector.detect(template, image_blur)
+                grid_r = int(self.bga_strip.window_rows or 0)
+                grid_c = int(self.bga_strip.window_cols or 0)
+                if grid_r <= 0 or grid_c <= 0:
+                    grid_r, grid_c = 1, 1
+                search_roi = self.params.get("search_roi") or []
+                img_h, img_w = image.shape[:2]
+                pos_grid = assign_matches_to_grid(
+                    template_matches,
+                    template_width,
+                    template_height,
+                    search_roi,
+                    (img_h, img_w),
+                    grid_r,
+                    grid_c,
+                )
+                slot = [[None] * grid_c for _ in range(grid_r)]
+                for gr in range(grid_r):
+                    for gc in range(grid_c):
+                        pos = pos_grid[gr][gc]
+                        if pos is None:
+                            continue
+                        x, y = pos[0], pos[1]
+                        if not self._check_image_bounds(
+                            image, x, y, template_width, template_height
+                        ):
+                            self._update_message_signal.emit(
+                                f"警告: 模板位置 ({x}, {y}) 超出图像边界 ({img_w}, {img_h})"
+                            )
+                            time.sleep(0.01)
+                            continue
+                        product_image = image[
+                            y : y + template_height, x : x + template_width
+                        ]
+                        success, msg, product_info = self._detect_product(
+                            x, y, product_image
+                        )
+                        if not success:
+                            filepath_result = self._generate_image_filename("ERROR")
+                            filepath_ori = self._generate_image_filename("ORI")
+                            self._async_save_image(
+                                product_info["product_image_result"], filepath_result
+                            )
+                            self._async_save_image(product_image, filepath_ori)
+                        if "OK" not in product_info["defect_type"]:
+                            defect_type = (
+                                product_info["defect_type"][0]
+                                if len(product_info["defect_type"]) > 1
+                                else "UNKNOWN"
+                            )
+                            filepath_result = self._generate_image_filename(defect_type)
+                            filepath_ori = self._generate_image_filename("ORI")
+                            self._async_save_image(
+                                product_info["product_image_result"], filepath_result
+                            )
+                            self._async_save_image(product_image, filepath_ori)
+                        slot[gr][gc] = product_info
+                        image_result[
+                            y : y + template_height, x : x + template_width
+                        ] = product_info["product_image_result"]
                 #——————————————————更新显示和统计信息——————————————————————————————————————————————————————
 
-                self._update_image_signal.emit(image_result,self.bga_strip)
-                self.bga_strip.write(current_product_list,image)
+                self._update_image_signal.emit(image_result, self.bga_strip)
+                self.bga_strip.write(slot, image)
                 stats_info = self.bga_strip.get_statistics_info()
-                
-                # NG 监控：检查告警并写入 Modbus 寄存器 1（0=正常, 998=良率低, 999=不良超限）
+
                 ng_monitor = self.params.get("ng_monitor", {})
                 alarm_code = check_ng_alarm(stats_info, ng_monitor) if stats_info else 0
+
+                # 主界面统计：strip 进行中发射合并数据（_lot_stats + 当前 strip）
+                if stats_info:
+                    merged = self._build_lot_stats_for_emit(stats_info, is_strip_finished=False)
+                    self._update_statistics_signal.emit(merged)
+
+                # 与 JIGSAW_Rebuild WorkThread：完成沿且 front|back 有效时，先写结果寄存器+完成线圈1/2，再写日志，最后写 coil0=1（中间不插入其它 Holding）
+                strip_done_modbus = (
+                    trigger_finished == 1
+                    and trigger_finished_last == 0
+                    and (trigger_front == 1 or trigger_back == 1)
+                )
+                if strip_done_modbus:
+                    if stats_info:
+                        self._lot_stats["total_count"] += stats_info.get("total_count", 0)
+                        self._lot_stats["ng_count"] += stats_info.get("ng_count", 0)
+                        for k, v in (stats_info.get("defect_counts") or {}).items():
+                            self._lot_stats["defect_counts"][k] = self._lot_stats["defect_counts"].get(k, 0) + v
+                    send_data = self.bga_strip.full_value.copy()
+                    log_info = self.bga_strip.get_log_info()
+                    self._write_modbus_registers(send_data, mode, side=self.current_side)
+                    self.write_log_to_file(log_info)
+
+                # 与 Rebuild：WRITE_SINGLE_COIL 线圈0=1 紧接在上一段完成之后（对应旧项目 _init_params 等之后的位置）
+                self.MM.write(alias="transfer_modbus", address=0, value_list=[1], function_code=cst.WRITE_SINGLE_COIL)
+
+                # v2 扩展：在 coil0 之后再写 NG 寄存器1/3 及 UI 统计，避免打乱与 PLC 约定的时序
+                if strip_done_modbus:
+                    final_alarm = check_ng_alarm(stats_info, ng_monitor) if stats_info else 0
+                    if final_alarm == 0 and self._last_alarm_code != 0:
+                        try:
+                            self.MM.write(alias="transfer_modbus", address=3, value_list=[0], function_code=cst.WRITE_SINGLE_REGISTER)
+                            self._last_alarm_code = 0
+                        except Exception as e:
+                            print(f"NG监控 复位 Modbus 写入异常: {e}")
+                    lot_emit = self._build_lot_stats_for_emit(None, is_strip_finished=True)
+                    self._update_statistics_signal.emit(lot_emit)
+
                 if alarm_code != self._last_alarm_code:
                     try:
                         ok, err = self.MM.write(alias="transfer_modbus", address=1, value_list=[alarm_code], function_code=cst.WRITE_SINGLE_REGISTER)
@@ -358,39 +453,6 @@ class TransferThread(QThread):
                             print(f"NG监控 Modbus 写入失败: {err}")
                     except Exception as e:
                         print(f"NG监控 Modbus 写入异常: {e}")
-                
-                # 主界面统计：strip 进行中发射合并数据（_lot_stats + 当前 strip）
-                if stats_info:
-                    merged = self._build_lot_stats_for_emit(stats_info, is_strip_finished=False)
-                    self._update_statistics_signal.emit(merged)
-                
-                #——————————————————完成信号触发，结果分析写入————————————————————————————————————
-                if  trigger_finished == 1 and trigger_finished_last == 0:
-                    # 累加当前 strip 到 lot 级统计
-                    if stats_info:
-                        self._lot_stats["total_count"] += stats_info.get("total_count", 0)
-                        self._lot_stats["ng_count"] += stats_info.get("ng_count", 0)
-                        for k, v in (stats_info.get("defect_counts") or {}).items():
-                            self._lot_stats["defect_counts"][k] = self._lot_stats["defect_counts"].get(k, 0) + v
-                    
-                    send_data = self.bga_strip.full_value.copy()
-                    log_info = self.bga_strip.get_log_info()
-                    self._write_modbus_registers(send_data, mode)
-                    self.write_log_to_file(log_info)
-                    
-                    # strip 结束：再次检查告警，无告警时写 0
-                    final_alarm = check_ng_alarm(stats_info, ng_monitor) if stats_info else 0
-                    if final_alarm == 0 and self._last_alarm_code != 0:
-                        try:
-                            self.MM.write(alias="transfer_modbus", address=3, value_list=[0], function_code=cst.WRITE_SINGLE_REGISTER)
-                            self._last_alarm_code = 0
-                        except Exception as e:
-                            print(f"NG监控 复位 Modbus 写入异常: {e}")
-                    
-                    # 发射 lot 级统计
-                    lot_emit = self._build_lot_stats_for_emit(None, is_strip_finished=True)
-                    self._update_statistics_signal.emit(lot_emit)
-                self.MM.write(alias="transfer_modbus",address = 0,value_list=[1],function_code=cst.WRITE_SINGLE_COIL)
             elif trigger_camera ==0 and trigger_finished == 0:
                 self.MM.write(alias="transfer_modbus",address = 0,value_list=[0],function_code=cst.WRITE_SINGLE_COIL)
             else:
@@ -522,7 +584,7 @@ class TransferThread(QThread):
             # 生成文件名
             end_time = datetime.now()
             timestamp = end_time.strftime("%Y%m%d_%H%M%S")
-            side = self.bga_strip.strip_side if hasattr(self.bga_strip, 'strip_side') else "front"
+            side = self.current_side
             lot_id = self.bga_strip.strip_lot if hasattr(self.bga_strip, 'strip_lot') else "none"
             sn_id = self.bga_strip.strip_sn if hasattr(self.bga_strip, 'strip_sn') else "none"
 
@@ -724,12 +786,13 @@ class TransferThread(QThread):
             traceback.print_exc()
 
     #——————————————————————————————写入Modbus寄存器函数————————————————————————————————————————————————————————————————
-    def _write_modbus_registers(self,value_array, mode):
+    def _write_modbus_registers(self, value_array, mode, side=None):
         """
-        写入Modbus寄存器
+        写入Modbus寄存器（与 Rebuild _write_modbus_registers(side, value_array, mode) 一致，side 决定线圈/寄存器基址）
         Args:
             value_array: 要写入的值数组
             mode: 写入模式
+            side: "front" | "back"，默认 self.current_side
         Returns:
             True: 写入成功
             False: 写入失败
@@ -737,7 +800,7 @@ class TransferThread(QThread):
         value_array = np.array(value_array)
         mask = ~np.isin(value_array, [0, 1, 2, 3])
         value_array[mask] = 3
-        side = self.bga_strip.strip_side
+        side = self.current_side if side is None else side
         coil_address = 1 if side == "front" else 2
         register_start = 2 if side == "front" else 2002
         
@@ -746,27 +809,24 @@ class TransferThread(QThread):
         
         if not result_list:
             print(f"警告: {side} 数据为空，跳过写入")
-            return
-        
-        MAX_REGISTERS = 123
-        total_registers = len(result_list)
-        
-        if total_registers > MAX_REGISTERS:
-            num_batches = (total_registers + MAX_REGISTERS - 1) // MAX_REGISTERS
-            for batch_idx in range(num_batches):
-                start_idx = batch_idx * MAX_REGISTERS
-                end_idx = min(start_idx + MAX_REGISTERS, total_registers)
-                batch_data = result_list[start_idx:end_idx]
-                current_register_start = register_start + start_idx
-                try:
-                    self.MM.write(alias="transfer_modbus",address = current_register_start,value_list=batch_data,function_code=cst.WRITE_MULTIPLE_REGISTERS)
-                except Exception as e:
-                    print(f"错误: {side} 批次 {batch_idx + 1} 写入失败: {str(e)}")
-                    return False
-                time.sleep(0.01)
-            self.MM.write(alias="transfer_modbus",address = coil_address,value_list=[1],function_code=cst.WRITE_SINGLE_COIL)
-            return True
-        else:
-            self.MM.write(alias="transfer_modbus",address = register_start,value_list=result_list,function_code=cst.WRITE_MULTIPLE_REGISTERS)
-            self.MM.write(alias="transfer_modbus",address = coil_address,value_list=[1],function_code=cst.WRITE_SINGLE_COIL)
-            return True
+            return False
+
+        ok, err = self.MM.write(
+            alias="transfer_modbus",
+            address=register_start,
+            value_list=result_list,
+            function_code=cst.WRITE_MULTIPLE_REGISTERS,
+        )
+        if not ok:
+            print(f"错误: {side} 写入保持寄存器失败: {err}")
+            return False
+        ok_c, err_c = self.MM.write(
+            alias="transfer_modbus",
+            address=coil_address,
+            value_list=[1],
+            function_code=cst.WRITE_SINGLE_COIL,
+        )
+        if not ok_c:
+            print(f"错误: {side} 写入完成线圈失败: {err_c}")
+            return False
+        return True

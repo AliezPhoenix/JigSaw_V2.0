@@ -1,4 +1,5 @@
 from threading import Thread
+from src.support import support_funs
 import ui.main_window_ui as main_window_ui
 from PyQt5.QtWidgets import QMainWindow
 from tools.MvImport.MvErrorDefine_const import MV_OK
@@ -1199,7 +1200,8 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "allow_mark": params.get("allow_mark", False),
         }
         print(detect_params)
-        for x, y in template_pos_list:
+        for item in template_pos_list:
+            x, y = item[0], item[1]
             if x + template_w > img_w or y + template_h > img_h:
                 continue
             product_image = image[y:y + template_h, x:x + template_w]

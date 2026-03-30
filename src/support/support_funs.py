@@ -207,6 +207,86 @@ def calculate_write_positions(target_array, window_array):
     return positions
 
 
+def assign_matches_to_grid(
+    matches,
+    template_width: int,
+    template_height: int,
+    search_roi,
+    image_hw: tuple,
+    grid_rows: int,
+    grid_cols: int,
+):
+    """
+    按模板中心点将匹配落入均匀网格；同格多点时保留置信度最高者。
+
+    Args:
+        matches: [(x, y, conf), ...]，全图坐标
+        search_roi: [x, y, w, h] 或 None，与模板检测分桶一致
+        image_hw: (img_h, img_w)
+        grid_rows / grid_cols: 当前视野行、列数（与 params current_row / current_col 一致）
+
+    Returns:
+        grid_rows × grid_cols，每格为 None 或 (x, y) 整数左上角坐标
+    """
+    img_h, img_w = image_hw
+    if grid_rows <= 0 or grid_cols <= 0:
+        return [[None] * max(1, grid_cols) for _ in range(max(1, grid_rows))]
+
+    if search_roi and isinstance(search_roi, (list, tuple)) and len(search_roi) >= 4:
+        rx, ry, rw, rh = (
+            int(search_roi[0]),
+            int(search_roi[1]),
+            int(search_roi[2]),
+            int(search_roi[3]),
+        )
+    else:
+        rx, ry, rw, rh = 0, 0, img_w, img_h
+
+    rw = max(1, rw)
+    rh = max(1, rh)
+    cell_w = rw / float(grid_cols)
+    cell_h = rh / float(grid_rows)
+
+    best = [[None] * grid_cols for _ in range(grid_rows)]
+
+    for x, y, conf in matches:
+        cx = float(x) + template_width / 2.0
+        cy = float(y) + template_height / 2.0
+        gc = int((cx - rx) / cell_w) if cell_w > 0 else 0
+        gr = int((cy - ry) / cell_h) if cell_h > 0 else 0
+        gc = max(0, min(grid_cols - 1, gc))
+        gr = max(0, min(grid_rows - 1, gr))
+        prev = best[gr][gc]
+        if prev is None or conf > prev[2]:
+            best[gr][gc] = (int(x), int(y), float(conf))
+
+    out = [[None] * grid_cols for _ in range(grid_rows)]
+    for gr in range(grid_rows):
+        for gc in range(grid_cols):
+            if best[gr][gc] is not None:
+                bx, by, _ = best[gr][gc]
+                out[gr][gc] = (bx, by)
+    return out
+
+
+def _bga_slot_is_empty(slot) -> bool:
+    if not slot:
+        return True
+    for row in slot:
+        for cell in row:
+            if cell is not None:
+                return False
+    return True
+
+
+def _is_bga_product_slot(value) -> bool:
+    return (
+        isinstance(value, list)
+        and len(value) > 0
+        and isinstance(value[0], list)
+    )
+
+
 class Bga_Strip():
     def __init__(self,station,strip_side:str, strip_lot:str, strip_sn, strip_create_time:str, params:dict):
         # 从params中获取尺寸参数
@@ -257,63 +337,87 @@ class Bga_Strip():
         # 添加日志数据存储
         self.accumulated_log_info = []  # 存储所有产品检测信息
     
-    def write(self, current_value, current_image):
+    def write(self, slot, current_image):
         """
-        将current_value中的值按照顺序填入full_value当前切片中非0的位置
-        
+        将二维 slot 中每格的产品结果写入 full_value 当前窗口切片内值为 99 的格；
+        slot[行][列] 与窗口棋盘一致，None 表示该格未检出，保持 99。
+
         参数:
-            current_value: 值列表，长度等于当前切片中所有非0元素的数量
+            slot: List[List[Optional[dict]]]，形状为 window_rows × window_cols，与 params 中 current_row/current_col 一致
             current_image: 当前图像
         """
         # 检查count是否超出范围
         if self.count >= len(self.position_list):
             print(f"错误: count ({self.count}) 超出position_list范围 ({len(self.position_list)})")
             return
-        
-        if not current_value:
-            print("警告: current_value为空，跳过写入")
+
+        if slot is None:
+            print("警告: slot 为 None，跳过写入")
             self.image_dict[self.position_list[self.count][0:2]] = current_image
             self.count += 1
             return
-        
+
+        if not _is_bga_product_slot(slot):
+            print("错误: write 需要二维 slot [行][列]（与 current_row × current_col 一致）")
+            self.image_dict[self.position_list[self.count][0:2]] = current_image
+            self.count += 1
+            return
+
+        if _bga_slot_is_empty(slot):
+            print("警告: slot 全空，跳过写入")
+            self.image_dict[self.position_list[self.count][0:2]] = current_image
+            self.count += 1
+            return
+
+        if (
+            len(slot) != self.window_rows
+            or any(len(row) != self.window_cols for row in slot)
+        ):
+            print(
+                f"错误: slot 维度 {len(slot)}×{len(slot[0]) if slot else 0} "
+                f"与窗口 {self.window_rows}×{self.window_cols} 不符，跳过本帧写入"
+            )
+            self.image_dict[self.position_list[self.count][0:2]] = current_image
+            self.count += 1
+            return
+
         # 获取当前位置信息
         pos = self.position_list[self.count]
         row_start, col_start, _, _, actual_row_end, actual_col_end, _, _ = pos
-        
+
         # 调整切片范围到最大可用范围
         row_start = max(0, row_start)
         col_start = max(0, col_start)
         row_end = min(actual_row_end, self.full_value_rows)
         col_end = min(actual_col_end, self.full_value_cols)
-        
+
         # 验证调整后的范围有效性
         if row_end <= row_start or col_end <= col_start:
             print(f"错误: 调整后的切片范围无效: ({row_start}, {col_start}) 到 ({row_end}, {col_end})")
             self.image_dict[pos[0:2]] = current_image
             self.count += 1
             return
-        
+
         # 获取切片并找到所有值为99的位置（99代表未检测到产品，需要写入检测结果）
         full_slice = self.full_value[row_start:row_end, col_start:col_end].copy()
         target_positions = [
-            (row, col) 
-            for row in range(full_slice.shape[0]) 
-            for col in range(full_slice.shape[1]) 
+            (row, col)
+            for row in range(full_slice.shape[0])
+            for col in range(full_slice.shape[1])
             if full_slice[row, col] == 99
         ]
-        
+
         if not target_positions:
             print("警告: 切片中没有值为99的位置，跳过写入")
             self.image_dict[pos[0:2]] = current_image
             self.count += 1
             return
-        
-        # 将current_value中的值填入值为99的位置
-        if len(current_value) != len(target_positions):
-            print(f"警告: current_value长度 ({len(current_value)}) 与切片99位置数量 ({len(target_positions)}) 不匹配")
-        
-        for i, (row, col) in enumerate(target_positions[:len(current_value)]):
-            defect_type = current_value[i]["defect_type"]
+
+        for row, col in target_positions:
+            product_info = slot[row][col]
+            if product_info is None:
+                continue
+            defect_type = product_info["defect_type"]
             # 根据defect_type列表中的缺陷类型设置对应的值
             if not isinstance(defect_type, list) or len(defect_type) == 0 or defect_type[0] == "OK":
                 full_slice[row, col] = 2  # OK - 绿色
@@ -334,77 +438,85 @@ class Bga_Strip():
                     full_slice[row, col] = 7  #Scratch - 蓝色
                 else:
                     full_slice[row, col] = 8  # 默认NG（如Scratch等）- 红色
-        
+
         # 将修改后的切片写回full_value
         self.full_value[row_start:row_end, col_start:col_end] = full_slice
-        
-        # 将产品检测信息转换为日志格式并存储
-        for i, product_info in enumerate(current_value):
-            log_entry = {}
-            
-            # 产品序号
-            log_entry["product_index"] = len(self.accumulated_log_info) + 1
-            
-            # 尺寸信息
-            size_result = product_info.get("size_result")
-            if size_result and len(size_result) > 2:
-                size_data = size_result[2]
-                width_mm = size_data.get("width", None)
-                height_mm = size_data.get("height", None)
-                log_entry["size"] = [width_mm, height_mm] if width_mm is not None and height_mm is not None else [None, None]
-            else:
-                log_entry["size"] = [None, None]
-            
-            # Mark信息
-            mark_result = product_info.get("mark_result")
-            if mark_result and len(mark_result) > 2:
-                mark_data = mark_result[2]
-                # 如果mark_result存在且is_valid为True，则表示检测到Mark（有Mark）
-                log_entry["has_mark"] = mark_data.get("is_valid", False)
-            else:
-                log_entry["has_mark"] = False
-            
-            # 球信息
-            ball_result = product_info.get("ball_result")
-            ok_balls = []
-            ng_balls = []
-            if ball_result and len(ball_result) > 2:
-                ball_data = ball_result[2]
-                ok_details = ball_data.get("ok_details", [])
-                ng_details = ball_data.get("ng_details", [])
-                
-                # 提取合格球信息
-                for ball in ok_details:
-                    ok_balls.append({
-                        "radius_mm": ball.get("radius_mm"),
-                        "area_mm2": ball.get("area_mm", 0.0)  # 使用area_mm作为area_mm2
-                    })
-                
-                # 提取不合格球信息
-                for ball in ng_details:
-                    ng_balls.append({
-                        "radius_mm": ball.get("radius_mm"),
-                        "area_mm2": ball.get("area_mm", 0.0)  # 使用area_mm作为area_mm2
-                    })
-            
-            log_entry["ok_balls"] = ok_balls
-            log_entry["ng_balls"] = ng_balls
-            
-            # 偏移量信息
-            shift_result = product_info.get("shift_result")
-            if shift_result and len(shift_result) > 2:
-                shift_data = shift_result[2]
-                log_entry["shift_x"] = shift_data.get("shift_x", None)
-                log_entry["shift_y"] = shift_data.get("shift_y", None)
-            else:
-                log_entry["shift_x"] = None
-                log_entry["shift_y"] = None
-            
-            # 缺陷类型
-            log_entry["defect_type"] = product_info.get("defect_type", ["OK"])
-            
-            # 添加到累积日志信息
-            self.accumulated_log_info.append(log_entry)
+
+        # 将产品检测信息转换为日志格式并存储（仅已检测格）
+        for gr in range(self.window_rows):
+            for gc in range(self.window_cols):
+                product_info = slot[gr][gc]
+                if product_info is None:
+                    continue
+                log_entry = {}
+
+                # 产品序号
+                log_entry["product_index"] = len(self.accumulated_log_info) + 1
+
+                # 尺寸信息
+                size_result = product_info.get("size_result")
+                if size_result and len(size_result) > 2:
+                    size_data = size_result[2]
+                    width_mm = size_data.get("width", None)
+                    height_mm = size_data.get("height", None)
+                    log_entry["size"] = (
+                        [width_mm, height_mm]
+                        if width_mm is not None and height_mm is not None
+                        else [None, None]
+                    )
+                else:
+                    log_entry["size"] = [None, None]
+
+                # Mark信息
+                mark_result = product_info.get("mark_result")
+                if mark_result and len(mark_result) > 2:
+                    mark_data = mark_result[2]
+                    # 如果mark_result存在且is_valid为True，则表示检测到Mark（有Mark）
+                    log_entry["has_mark"] = mark_data.get("is_valid", False)
+                else:
+                    log_entry["has_mark"] = False
+
+                # 球信息
+                ball_result = product_info.get("ball_result")
+                ok_balls = []
+                ng_balls = []
+                if ball_result and len(ball_result) > 2:
+                    ball_data = ball_result[2]
+                    ok_details = ball_data.get("ok_details", [])
+                    ng_details = ball_data.get("ng_details", [])
+
+                    # 提取合格球信息
+                    for ball in ok_details:
+                        ok_balls.append({
+                            "radius_mm": ball.get("radius_mm"),
+                            "area_mm2": ball.get("area_mm", 0.0)  # 使用area_mm作为area_mm2
+                        })
+
+                    # 提取不合格球信息
+                    for ball in ng_details:
+                        ng_balls.append({
+                            "radius_mm": ball.get("radius_mm"),
+                            "area_mm2": ball.get("area_mm", 0.0)  # 使用area_mm作为area_mm2
+                        })
+
+                log_entry["ok_balls"] = ok_balls
+                log_entry["ng_balls"] = ng_balls
+
+                # 偏移量信息
+                shift_result = product_info.get("shift_result")
+                if shift_result and len(shift_result) > 2:
+                    shift_data = shift_result[2]
+                    log_entry["shift_x"] = shift_data.get("shift_x", None)
+                    log_entry["shift_y"] = shift_data.get("shift_y", None)
+                else:
+                    log_entry["shift_x"] = None
+                    log_entry["shift_y"] = None
+
+                # 缺陷类型
+                log_entry["defect_type"] = product_info.get("defect_type", ["OK"])
+
+                # 添加到累积日志信息
+                self.accumulated_log_info.append(log_entry)
         
         # 保存图像并更新计数
         self.image_dict[pos[0:2]] = current_image

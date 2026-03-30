@@ -11,7 +11,10 @@ class TemplateDetector:
         }
     def detect(self, template, image):
         """
-        模板匹配
+        模板匹配。
+
+        Returns:
+            list[tuple]: 每项为 (x, y, confidence)，全图坐标；confidence 为 TM_CCOEFF_NORMED 得分。
         """
         params = self.params
         threshold = params.get("template_threshold", 0.6)
@@ -54,13 +57,18 @@ class TemplateDetector:
                     too_close = True
                     break
             if not too_close:
-                result_list.append((x, y))
+                result_list.append((x, y, confidence))
 
         y_tolerance = template_height/2
-        result_list.sort(key=lambda pt: (int(pt[1] / y_tolerance) if y_tolerance > 0 else int(pt[1]), pt[0]))
+        result_list.sort(
+            key=lambda pt: (int(pt[1] / y_tolerance) if y_tolerance > 0 else int(pt[1]), pt[0])
+        )
 
         # 将坐标转换为原始图像坐标（加上裁剪区域左上角偏移；循环内会覆盖 x,y，故用 roi_origin_*）
-        result_list = [(px + roi_origin_x, py + roi_origin_y) for px, py in result_list]
+        result_list = [
+            (px + roi_origin_x, py + roi_origin_y, float(conf))
+            for px, py, conf in result_list
+        ]
 
         return result_list
 
