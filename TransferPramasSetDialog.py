@@ -1,4 +1,14 @@
-from PyQt5.QtWidgets import QApplication, QDialog, QPushButton, QFileDialog, QMessageBox
+from PyQt5.QtWidgets import (
+    QApplication,
+    QDialog,
+    QPushButton,
+    QFileDialog,
+    QMessageBox,
+    QListWidget,
+    QAbstractItemView,
+    QWidget,
+    QHBoxLayout,
+)
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap, QImage
 from ui.TransferPramasSetDialog_ui import Ui_TransferPramasSetDialog
@@ -16,6 +26,7 @@ from src.support.support_funs import (
     execute_product_detection,
     ensure_gray_u8,
     ensure_bgr_u8,
+    normalize_mark_rois_in_params,
 )
 
 class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
@@ -33,7 +44,8 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
         self.scratch_detector = ScratchDetector()
         self.config_manager = config_manager
         self.local_params = self.config_manager.get_section("work_transfer_params")
-        
+        normalize_mark_rois_in_params(self.local_params)
+
         # 存储原始图像
         self.template_image = None  # 模板图像（用于显示，可能包含屏蔽效果，用于检测）
         self.processed_image = None  # 处理后的图像
@@ -125,6 +137,20 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
         # Mark检测区域相关按钮
         self.pushButton_create_mark_roi_transfer.clicked.connect(lambda: self.create_roi("mark"))
         self.pushButton__clear_mark_roi_transfer.clicked.connect(lambda: self.clear_check_roi("mark"))
+        row_w = QWidget(self.groupBox_2)
+        hl = QHBoxLayout(row_w)
+        hl.setContentsMargins(0, 0, 0, 0)
+        self._mark_roi_list = QListWidget()
+        self._mark_roi_list.setMaximumHeight(80)
+        self._mark_roi_list.setToolTip("Mark ROI 列表（最多 4 个），框选追加")
+        self._mark_roi_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.pushButton_remove_mark_roi_transfer = QPushButton("删除选中")
+        self.pushButton_remove_mark_roi_transfer.clicked.connect(
+            self._remove_selected_mark_roi_transfer
+        )
+        hl.addWidget(self._mark_roi_list)
+        hl.addWidget(self.pushButton_remove_mark_roi_transfer)
+        self.gridLayout_6.addWidget(row_w, 6, 0, 1, 5)
         # 划痕检测区域相关按钮（如果存在）
         if hasattr(self, 'pushButton_create_scratch_roi_transfer'):
             self.pushButton_create_scratch_roi_transfer.clicked.connect(lambda: self.create_roi("scratch"))
@@ -137,6 +163,7 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
             self.pushButton_clear_ball_search_roi_transfer.clicked.connect(lambda: self.clear_check_roi("ball_search"))
         
         self.update_params()
+        self._sync_mark_roi_list_widget()
         # 锡球检测的 slider 触发 ball 检测
         self.horizontalSlider.valueChanged.connect(lambda: self.auto_run_test("ball"))
         self.horizontalSlider_2.valueChanged.connect(lambda: self.auto_run_test("ball"))
@@ -229,11 +256,15 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
                     x, y, w, h = int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3])
                     cv.rectangle(display_image, (x, y), (x + w, y + h), (0, 0, 0), -1)
         
-        # 绘制Mark检测区域（蓝色边框）
-        mark_roi = self.local_params.get("mark_roi", [])
-        if isinstance(mark_roi, list) and len(mark_roi) == 4:
-            x, y, w, h = int(mark_roi[0]), int(mark_roi[1]), int(mark_roi[2]), int(mark_roi[3])
-            cv.rectangle(display_image, (x, y), (x + w, y + h), (255, 0, 0), 2)
+        # 绘制Mark检测区域（多 ROI）
+        mark_rois = self.local_params.get("mark_rois", [])
+        colors = [(255, 0, 0), (255, 128, 0), (200, 0, 200), (0, 128, 255)]
+        if isinstance(mark_rois, list):
+            for idx, roi in enumerate(mark_rois):
+                if isinstance(roi, (tuple, list)) and len(roi) >= 4:
+                    x, y, w, h = int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3])
+                    c = colors[idx % len(colors)]
+                    cv.rectangle(display_image, (x, y), (x + w, y + h), c, 2)
         
         # 绘制锡球搜索区域（黄色边框）
         ball_search_roi = self.local_params.get("ball_search_roi", [])
@@ -248,6 +279,22 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
             cv.rectangle(display_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
         
         self.display_template_image(display_image)
+
+    def _sync_mark_roi_list_widget(self):
+        self._mark_roi_list.clear()
+        for i, r in enumerate(self.local_params.get("mark_rois") or []):
+            self._mark_roi_list.addItem(f"{i + 1}: {list(r)}")
+
+    def _remove_selected_mark_roi_transfer(self):
+        row = self._mark_roi_list.currentRow()
+        if row < 0:
+            return
+        mrs = list(self.local_params.get("mark_rois") or [])
+        if 0 <= row < len(mrs):
+            mrs.pop(row)
+            self.local_params["mark_rois"] = mrs
+        self._sync_mark_roi_list_widget()
+        self._update_template_display_with_markers()
     
     def display_processed_image(self, image):
         """在处理后图像 label 中显示图像"""
@@ -326,11 +373,20 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
                     mark_area = result_dict.get("mark_area", 0.0)
                     mark_area_mm = result_dict.get("mark_area_mm", mark_area * pixel_size * pixel_size)
                     
+                    allow_mark = self.local_params.get("allow_mark", True)
                     result_text += f"【Mark检测】\n"
-                    # 关键差异：检测到Mark判定为OK，未检测到Mark判定为NG
-                    result_text += f"判定: {'OK (检测到Mark)' if is_valid else 'NG (未检测到Mark)'}\n"
+                    per_roi = result_dict.get("per_roi") or []
+                    if per_roi:
+                        result_text += f"聚合({'AND' if allow_mark else 'OR'}) is_valid={is_valid}\n"
+                        for pr in per_roi:
+                            iv = pr.get("is_valid", False)
+                            result_text += f"  ROI{pr.get('index', 0) + 1}: {'有Mark' if iv else '无Mark'}\n"
+                    if allow_mark:
+                        result_text += f"判定: {'OK (Mark齐全)' if is_valid else 'NG (Mark不全)'}\n"
+                    else:
+                        result_text += f"判定: {'NG (检测到Mark)' if is_valid else 'OK (未检测到Mark)'}\n"
                     if mark_area > 0:
-                        result_text += f"Mark面积: {mark_area:.1f}像素² ({mark_area_mm:.2f}mm²)\n"
+                        result_text += f"Mark面积合计: {mark_area:.1f}像素² ({mark_area_mm:.2f}mm²)\n"
                     else:
                         result_text += f"Mark面积: 未检测到\n"
                     result_text += "\n"
@@ -608,7 +664,7 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
             min_threshold_mark = self.local_params["min_threshold_mark"]
             max_threshold_mark = self.local_params["max_threshold_mark"]
             min_mark_area = self.local_params["min_mark_area"]
-            mark_roi = self.local_params.get("mark_roi", [])
+            mark_rois = self.local_params.get("mark_rois", [])
             mark_detect_mode = self.local_params.get("mark_detect_mode", "manual")
             self.mark_detector.update_params(
                 {
@@ -616,8 +672,9 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
                     "max_threshold": max_threshold_mark,
                     "min_mark_area": min_mark_area,
                     "pixel_size": pixel_size,
-                    "mark_detect_mode":mark_detect_mode,
-                    "mark_roi": mark_roi,
+                    "mark_detect_mode": mark_detect_mode,
+                    "mark_rois": mark_rois,
+                    "allow_mark": self.local_params.get("allow_mark", True),
                 })
             #————————————————————————scratch参数——————————————————————
             min_threshold_scratch = self.local_params.get("min_threshold_scratch", 0)
@@ -714,6 +771,7 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
                         # 再次处理事件，确保label尺寸已更新
                         QApplication.processEvents()
                         self._update_template_display_with_markers()
+                self._sync_mark_roi_list_widget()
                 QApplication.processEvents()
                 QMessageBox.information(self, "成功", "参数已成功加载")
             
@@ -840,8 +898,9 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
             # 但确保它们存在
             if "roi_block" not in self.local_params:
                 self.local_params["roi_block"] = []
-            if "mark_roi" not in self.local_params:
-                self.local_params["mark_roi"] = []
+            if "mark_rois" not in self.local_params:
+                self.local_params["mark_rois"] = []
+            self.local_params.pop("mark_roi", None)
             if "ball_search_roi" not in self.local_params:
                 self.local_params["ball_search_roi"] = []
             if "scratch_roi" not in self.local_params:
@@ -858,7 +917,7 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
         Args:
             detect_type: 检测类型
                 - "ball" → 创建 ball_search_roi（单个列表 [x, y, w, h]）
-                - "mark" → 创建 mark_roi（单个列表 [x, y, w, h]）
+                - "mark" → 向 mark_rois 追加 [x, y, w, h]（最多 4 个）
                 - "scratch" → 创建 scratch_roi（单个列表 [x, y, w, h]）
                 - "block" → 创建 roi_block（屏蔽区域，追加到列表）
         """
@@ -909,8 +968,14 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
             # 锡球搜索区域：单个列表
             self.local_params["ball_search_roi"] = [int(x), int(y), int(w), int(h)]
         elif detect_type == "mark":
-            # Mark检测区域：单个列表
-            self.local_params["mark_roi"] = [int(x), int(y), int(w), int(h)]
+            mrs = self.local_params.get("mark_rois") or []
+            if not isinstance(mrs, list):
+                mrs = []
+            if len(mrs) >= 4:
+                QMessageBox.warning(self, "提示", "Mark ROI 最多 4 个")
+                return
+            mrs.append([int(x), int(y), int(w), int(h)])
+            self.local_params["mark_rois"] = mrs
         elif detect_type == "scratch":
             # 划痕检测区域：单个列表
             self.local_params["scratch_roi"] = [int(x), int(y), int(w), int(h)]
@@ -919,13 +984,15 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
             return
         
         # 更新显示（包含所有标记）
+        if detect_type == "mark":
+            self._sync_mark_roi_list_widget()
         self._update_template_display_with_markers()
     
     def clear_check_roi(self, detect_type):
         """清除检测区域"""
         # 根据detect_type映射到正确的参数名
         roi_key_map = {
-            "mark": "mark_roi",
+            "mark": "mark_rois",
             "ball_search": "ball_search_roi",
             "scratch": "scratch_roi",
             "block": "roi_block"
@@ -935,13 +1002,32 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
             self.local_params[roi_key] = []
 
         # 更新显示（移除区域标记）
+        if detect_type == "mark":
+            self._sync_mark_roi_list_widget()
         self._update_template_display_with_markers()
     
     def confirm_load(self):
         """确认并保存参数到配置文件"""
         try:
             self._update_params_from_ui()
+            if self.local_params.get("mark_check_enable") and len(
+                self.local_params.get("mark_rois") or []
+            ) < 1:
+                QMessageBox.warning(
+                    self,
+                    "提示",
+                    "已启用 Mark 检测，请至少框选 1 个 Mark ROI（最多 4 个）。",
+                )
+                return
+            if len(self.local_params.get("mark_rois") or []) > 4:
+                QMessageBox.warning(self, "提示", "Mark ROI 最多 4 个。")
+                return
+            self.local_params.pop("mark_roi", None)
             self.config_manager.set_section("work_transfer_params", self.local_params)
+            other = self.config_manager.get_section("work_dry_params")
+            other["mark_rois"] = list(self.local_params.get("mark_rois", []))
+            other.pop("mark_roi", None)
+            self.config_manager.set_section("work_dry_params", other)
             QMessageBox.information(self, "成功", "参数已成功保存")
         except Exception as e:
             QMessageBox.warning(self, "错误", f"保存参数失败: {str(e)}")

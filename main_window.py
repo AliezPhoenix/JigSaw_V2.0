@@ -24,6 +24,7 @@ from src.support.support_funs import (
     Bga_Strip,
     ensure_gray_u8,
     ensure_bgr_u8,
+    normalize_mark_rois_in_params,
 )
 from src.support.InteractiveBgaLabel import InteractiveBgaLabel
 from src.detectors.ball_detector import BallDetector
@@ -1102,6 +1103,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             params = self.config_manager.get_section(params_section)
         except KeyError:
             params = {}
+        normalize_mark_rois_in_params(params)
 
         pixel_size = params.get("pixel_size", 0.008823)
         product_size = params.get("product_size", [10.0, 15.0])
@@ -1129,13 +1131,19 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "pixel_size": pixel_size,
         })
         mark_detector = MarkDetector()
+        _allow_mark = (
+            params.get("allow_mark", True)
+            if station != "dry"
+            else params.get("allow_mark", False)
+        )
         mark_detector.update_params({
             "min_threshold": params.get("min_threshold_mark", 0),
             "max_threshold": params.get("max_threshold_mark", 255),
             "min_mark_area": params.get("min_mark_area", 2000),
             "pixel_size": pixel_size,
             "mark_detect_mode": params.get("mark_detect_mode", "manual"),
-            "mark_roi": params.get("mark_roi", []),
+            "mark_rois": params.get("mark_rois", []),
+            "allow_mark": _allow_mark,
         })
         shift_detector = ShiftDetector()
         shift_detector.update_params({

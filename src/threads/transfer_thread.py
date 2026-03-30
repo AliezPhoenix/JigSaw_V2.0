@@ -1,5 +1,6 @@
 # 从共享导入文件导入所有需要的模块
 from src.threads.thread_imports import *
+from src.support.support_funs import normalize_mark_rois_in_params
 
 class TransferThread(QThread):
     _update_image_signal = pyqtSignal(np.ndarray, object)  # (图像, Bga_Strip|None)
@@ -58,6 +59,7 @@ class TransferThread(QThread):
     #——————————————————————————————参数更新函数————————————————————————————————————————————————————————————————————
     def update_params(self,params:dict):
         self.params = params
+        normalize_mark_rois_in_params(self.params)
         self.size_detect_params = {
             "min_threshold": self.params.get("min_threshold_size", 0),
             "max_threshold": self.params.get("max_threshold_size", 255),
@@ -92,7 +94,8 @@ class TransferThread(QThread):
             "auto_threshold_factor": 1.05,
             "pixel_size": self.params.get("pixel_size", 0.008823),
             "mark_detect_mode": self.params.get("mark_detect_mode", "manual"),
-            "mark_roi": self.params.get("mark_roi", [])
+            "mark_rois": self.params.get("mark_rois", []),
+            "allow_mark": self.params.get("allow_mark", True),
         }
 
         self.template_detect_params = {
