@@ -269,22 +269,33 @@ def assign_matches_to_grid(
     return out
 
 
-def _bga_slot_is_empty(slot) -> bool:
-    if not slot:
-        return True
-    for row in slot:
-        for cell in row:
-            if cell is not None:
-                return False
-    return True
-
-
 def _is_bga_product_slot(value) -> bool:
     return (
         isinstance(value, list)
         and len(value) > 0
         and isinstance(value[0], list)
     )
+
+
+def _is_vacant_log_entry(product: dict) -> bool:
+    dt = product.get("defect_type", [])
+    return isinstance(dt, list) and len(dt) > 0 and dt[0] == "空缺"
+
+
+def _vacant_log_entry(product_index: int, gr: int, gc: int) -> dict:
+    """模板未匹配或无效格：写入 accumulated_log_info 的占位结构（与正常条目共字段）。"""
+    return {
+        "product_index": product_index,
+        "size": [None, None],
+        "has_mark": False,
+        "ok_balls": [],
+        "ng_balls": [],
+        "shift_x": None,
+        "shift_y": None,
+        "defect_type": ["空缺"],
+        "grid_row": gr,
+        "grid_col": gc,
+    }
 
 
 class Bga_Strip():
@@ -352,19 +363,23 @@ class Bga_Strip():
             return
 
         if slot is None:
-            print("警告: slot 为 None，跳过写入")
+            print("警告: slot 为 None，本帧棋盘不写值，按格记日志为空缺")
+            for gr in range(self.window_rows):
+                for gc in range(self.window_cols):
+                    self.accumulated_log_info.append(
+                        _vacant_log_entry(len(self.accumulated_log_info) + 1, gr, gc)
+                    )
             self.image_dict[self.position_list[self.count][0:2]] = current_image
             self.count += 1
             return
 
         if not _is_bga_product_slot(slot):
-            print("错误: write 需要二维 slot [行][列]（与 current_row × current_col 一致）")
-            self.image_dict[self.position_list[self.count][0:2]] = current_image
-            self.count += 1
-            return
-
-        if _bga_slot_is_empty(slot):
-            print("警告: slot 全空，跳过写入")
+            print("错误: write 需要二维 slot [行][列]（与 current_row × current_col 一致），按格记日志为空缺")
+            for gr in range(self.window_rows):
+                for gc in range(self.window_cols):
+                    self.accumulated_log_info.append(
+                        _vacant_log_entry(len(self.accumulated_log_info) + 1, gr, gc)
+                    )
             self.image_dict[self.position_list[self.count][0:2]] = current_image
             self.count += 1
             return
@@ -375,8 +390,13 @@ class Bga_Strip():
         ):
             print(
                 f"错误: slot 维度 {len(slot)}×{len(slot[0]) if slot else 0} "
-                f"与窗口 {self.window_rows}×{self.window_cols} 不符，跳过本帧写入"
+                f"与窗口 {self.window_rows}×{self.window_cols} 不符，本帧不写值，按格记日志为空缺"
             )
+            for gr in range(self.window_rows):
+                for gc in range(self.window_cols):
+                    self.accumulated_log_info.append(
+                        _vacant_log_entry(len(self.accumulated_log_info) + 1, gr, gc)
+                    )
             self.image_dict[self.position_list[self.count][0:2]] = current_image
             self.count += 1
             return
@@ -393,7 +413,12 @@ class Bga_Strip():
 
         # 验证调整后的范围有效性
         if row_end <= row_start or col_end <= col_start:
-            print(f"错误: 调整后的切片范围无效: ({row_start}, {col_start}) 到 ({row_end}, {col_end})")
+            print(f"错误: 调整后的切片范围无效: ({row_start}, {col_start}) 到 ({row_end}, {col_end})，按格记日志为空缺")
+            for gr in range(self.window_rows):
+                for gc in range(self.window_cols):
+                    self.accumulated_log_info.append(
+                        _vacant_log_entry(len(self.accumulated_log_info) + 1, gr, gc)
+                    )
             self.image_dict[pos[0:2]] = current_image
             self.count += 1
             return
@@ -408,7 +433,12 @@ class Bga_Strip():
         ]
 
         if not target_positions:
-            print("警告: 切片中没有值为99的位置，跳过写入")
+            print("警告: 切片中没有值为99的位置，跳过棋盘写入")
+            for gr in range(self.window_rows):
+                for gc in range(self.window_cols):
+                    self.accumulated_log_info.append(
+                        _vacant_log_entry(len(self.accumulated_log_info) + 1, gr, gc)
+                    )
             self.image_dict[pos[0:2]] = current_image
             self.count += 1
             return
@@ -442,11 +472,14 @@ class Bga_Strip():
         # 将修改后的切片写回full_value
         self.full_value[row_start:row_end, col_start:col_end] = full_slice
 
-        # 将产品检测信息转换为日志格式并存储（仅已检测格）
+        # 将产品检测信息转换为日志格式并存储（缺检格记为 defect_type: 空缺）
         for gr in range(self.window_rows):
             for gc in range(self.window_cols):
                 product_info = slot[gr][gc]
                 if product_info is None:
+                    self.accumulated_log_info.append(
+                        _vacant_log_entry(len(self.accumulated_log_info) + 1, gr, gc)
+                    )
                     continue
                 log_entry = {}
 
@@ -639,8 +672,14 @@ class Bga_Strip():
             
             for product in accumulated_log_info:
                 defect_type = product.get("defect_type", ["OK"])
-                # 如果defect_type[0]不是"OK"，则产品是NG
-                is_ng = isinstance(defect_type, list) and len(defect_type) > 0 and defect_type[0] != "OK"
+                # 「空缺」不计入 NG 统计
+                is_vacant = _is_vacant_log_entry(product)
+                is_ng = (
+                    not is_vacant
+                    and isinstance(defect_type, list)
+                    and len(defect_type) > 0
+                    and defect_type[0] != "OK"
+                )
                 
                 if is_ng:
                     ng_total_count += 1
@@ -708,8 +747,14 @@ class Bga_Strip():
                 size = product.get("size", [None, None])
                 defect_type = product.get("defect_type", ["OK"])
                 ng_balls = product.get("ng_balls", [])
-                # 如果defect_type[0]不是"OK"，则产品是NG
-                is_ng_product = isinstance(defect_type, list) and len(defect_type) > 0 and defect_type[0] != "OK"
+                is_vacant = _is_vacant_log_entry(product)
+                # 如果defect_type[0]不是"OK"，则产品是NG（「空缺」单独标记）
+                is_ng_product = (
+                    not is_vacant
+                    and isinstance(defect_type, list)
+                    and len(defect_type) > 0
+                    and defect_type[0] != "OK"
+                )
                 # 提取所有NG类型（defect_type中的所有元素都是NG类型）
                 ng_type_list = list(dict.fromkeys([t for t in defect_type if t != "OK"])) if isinstance(defect_type, list) else []
                 
@@ -728,7 +773,7 @@ class Bga_Strip():
                 if shift_y is None:
                     shift_y = 0.0
                 
-                product_list.append({
+                row_pl = {
                     "product_index": product.get("product_index", ""),
                     "width": f"{size[0]:.4f}" if size and size[0] is not None else "",
                     "height": f"{size[1]:.4f}" if size and size[1] is not None else "",
@@ -737,9 +782,10 @@ class Bga_Strip():
                     "ng_ball_info": ";".join(ng_info_list),
                     "shift_x": f"{shift_x:.4f}" if shift_x != 0.0 else "0.0000",
                     "shift_y": f"{shift_y:.4f}" if shift_y != 0.0 else "0.0000",
-                    "is_ng": "是" if is_ng_product else "否",
-                    "ng_types": ";".join(ng_type_list)
-                })
+                    "is_ng": "否" if is_vacant else ("是" if is_ng_product else "否"),
+                    "ng_types": "空缺" if is_vacant else ";".join(ng_type_list),
+                }
+                product_list.append(row_pl)
             
             # 构建返回字典
             # 计算总产品数：使用实际记录的产品数量
@@ -813,7 +859,13 @@ class Bga_Strip():
             
             for product in accumulated_log_info:
                 defect_type = product.get("defect_type", ["OK"])
-                is_ng = isinstance(defect_type, list) and len(defect_type) > 0 and defect_type[0] != "OK"
+                is_vacant = _is_vacant_log_entry(product)
+                is_ng = (
+                    not is_vacant
+                    and isinstance(defect_type, list)
+                    and len(defect_type) > 0
+                    and defect_type[0] != "OK"
+                )
                 
                 if is_ng:
                     ng_total_count += 1
@@ -822,7 +874,7 @@ class Bga_Strip():
                         primary_type = min(ng_types, key=lambda x: priority_map.get(x, 999))
                         ng_count_by_type[primary_type] += 1
             
-            # 计算良率
+            # 计算良率（「空缺」不计入 NG，仍计入 total_count）
             yield_rate = ((total_count - ng_total_count) / total_count * 100) if total_count > 0 else 0.0
             
             return {
