@@ -1,7 +1,6 @@
 # 从共享导入文件导入所有需要的模块
 from winsound import SND_ALIAS
 from src.threads.thread_imports import *
-from src.support.support_funs import normalize_mark_rois_in_params
 
 class DryThread(QThread):
     _update_image_signal = pyqtSignal(np.ndarray, object)  # (图像, Bga_Strip|None)
@@ -60,7 +59,6 @@ class DryThread(QThread):
     #——————————————————————————————参数更新函数————————————————————————————————————————————————————————————————————
     def update_params(self,params:dict):
         self.params = params
-        normalize_mark_rois_in_params(self.params)
         print(params)
         self.size_detect_params = {
             "min_threshold": self.params.get("min_threshold_size", 0),
@@ -93,11 +91,11 @@ class DryThread(QThread):
         self.mark_detect_params = {
             "min_threshold": self.params.get("min_threshold_mark", 0),
             "max_threshold": self.params.get("max_threshold_mark", 255),
-            "min_mark_area": self.params.get("min_mark_area", 2000),
             "auto_threshold_factor": 1.05,
             "pixel_size": self.params.get("pixel_size", 0.008823),
             "mark_detect_mode": self.params.get("mark_detect_mode", "manual"),
             "mark_rois": self.params.get("mark_rois", []),
+            "mark_roi_min_areas": self.params.get("mark_roi_min_areas", []),
             "allow_mark": self.params.get("allow_mark", False),
         }
 
@@ -369,8 +367,8 @@ class DryThread(QThread):
                 )
                 slot = [[None] * grid_c for _ in range(grid_r)]
                 for gr in range(grid_r):
-                    for gc in range(grid_c):
-                        pos = pos_grid[gr][gc]
+                    for gcol in range(grid_c):
+                        pos = pos_grid[gr][gcol]
                         if pos is None:
                             continue
                         x, y = pos[0], pos[1]
@@ -407,7 +405,7 @@ class DryThread(QThread):
                                 product_info["product_image_result"], filepath_result
                             )
                             self._async_save_image(product_image, filepath_ori)
-                        slot[gr][gc] = product_info
+                        slot[gr][gcol] = product_info
                         image_result[
                             y : y + template_height, x : x + template_width
                         ] = product_info["product_image_result"]

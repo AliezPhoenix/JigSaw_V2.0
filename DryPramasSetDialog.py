@@ -4,10 +4,6 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QFileDialog,
     QMessageBox,
-    QListWidget,
-    QAbstractItemView,
-    QWidget,
-    QHBoxLayout,
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap, QImage
@@ -26,8 +22,8 @@ from src.support.support_funs import (
     execute_product_detection,
     ensure_gray_u8,
     ensure_bgr_u8,
-    normalize_mark_rois_in_params,
 )
+from ui.mark_roi_manage_dialog import MarkRoiManageDialog
 
 class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
     def __init__(self,config_manager:'ConfigManager',parent=None):
@@ -44,7 +40,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         self.scratch_detector = ScratchDetector()
         self.config_manager = config_manager
         self.local_params = self.config_manager.get_section("work_dry_params")
-        normalize_mark_rois_in_params(self.local_params)
+        self._migrate_mark_roi_min_areas()
 
         # 存储原始图像
         self.template_image = None  # 模板图像（用于显示，可能包含屏蔽效果，用于检测）
@@ -117,21 +113,8 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         self.btn_ignore_roi.clicked.connect(lambda: self.create_roi("block"))
         self.btn_confirm_load.clicked.connect(self.confirm_load)
         self.btn_clear_roi.clicked.connect(lambda: self.clear_check_roi("block"))
-        # Mark检测区域相关按钮
-        self.pushButton_create_mark_roi_dry.clicked.connect(lambda: self.create_roi("mark"))
-        self.pushButton__clear_mark_roi_dry.clicked.connect(lambda:self.clear_check_roi("mark"))
-        row_w = QWidget(self.groupBox_2)
-        hl = QHBoxLayout(row_w)
-        hl.setContentsMargins(0, 0, 0, 0)
-        self._mark_roi_list = QListWidget()
-        self._mark_roi_list.setMaximumHeight(80)
-        self._mark_roi_list.setToolTip("Mark ROI 列表（最多 4 个），框选追加")
-        self._mark_roi_list.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.pushButton_remove_mark_roi_dry = QPushButton("删除选中")
-        self.pushButton_remove_mark_roi_dry.clicked.connect(self._remove_selected_mark_roi_dry)
-        hl.addWidget(self._mark_roi_list)
-        hl.addWidget(self.pushButton_remove_mark_roi_dry)
-        self.gridLayout_6.addWidget(row_w, 6, 0, 1, 5)
+        # Mark检测区域
+        self.pushButton_manage_mark_roi_dry.clicked.connect(self._open_mark_roi_manage)
         self.pushButton_create_ball_search_roi_dry.clicked.connect(lambda: self.create_roi("ball"))
         self.pushButton_clear_ball_search_roi_dry.clicked.connect(lambda:self.clear_check_roi("ball_search"))
         # 划痕检测区域相关按钮
@@ -147,7 +130,6 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         
     
         self.update_params()
-        self._sync_mark_roi_list_widget()
         # 锡球检测的 slider 触发 ball 检测
         self.horizontalSlider.valueChanged.connect(lambda: self.auto_run_test("ball"))
         self.horizontalSlider_2.valueChanged.connect(lambda: self.auto_run_test("ball"))
@@ -261,22 +243,37 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         
         self.display_template_image(display_image)
 
-    def _sync_mark_roi_list_widget(self):
-        self._mark_roi_list.clear()
-        for i, r in enumerate(self.local_params.get("mark_rois") or []):
-            self._mark_roi_list.addItem(f"{i + 1}: {list(r)}")
+    def _migrate_mark_roi_min_areas(self):
+        """旧键 min_mark_area → mark_roi_min_areas；保存前不再依赖 min_mark_area。"""
+        lp = self.local_params
+        mrs = lp.get("mark_rois") or []
+        if "mark_roi_min_areas" not in lp or lp["mark_roi_min_areas"] is None:
+            if mrs and "min_mark_area" in lp:
+                try:
+                    v = int(lp["min_mark_area"])
+                except (TypeError, ValueError):
+                    v = 0
+                lp["mark_roi_min_areas"] = [v] * len(mrs)
+            else:
+                lp["mark_roi_min_areas"] = []
+        self._sync_mark_roi_min_areas_len()
+        lp.pop("min_mark_area", None)
 
-    def _remove_selected_mark_roi_dry(self):
-        row = self._mark_roi_list.currentRow()
-        if row < 0:
-            return
-        mrs = list(self.local_params.get("mark_rois") or [])
-        if 0 <= row < len(mrs):
-            mrs.pop(row)
-            self.local_params["mark_rois"] = mrs
-        self._sync_mark_roi_list_widget()
-        self._update_template_display_with_markers()
-    
+    def _sync_mark_roi_min_areas_len(self):
+        mrs = self.local_params.get("mark_rois") or []
+        areas = list(self.local_params.get("mark_roi_min_areas") or [])
+        while len(areas) < len(mrs):
+            areas.append(-1)
+        self.local_params["mark_roi_min_areas"] = areas[: len(mrs)]
+
+    def _open_mark_roi_manage(self):
+        dlg = MarkRoiManageDialog(self)
+        if dlg.exec_() == QDialog.Accepted:
+            self._sync_mark_roi_min_areas_len()
+            self._update_template_display_with_markers()
+            if self.is_init and self.template_image is not None:
+                self.auto_run_test("mark")
+
     def display_processed_image(self, image):
         """在处理后图像 label 中显示图像"""
         if image is None:
@@ -351,9 +348,6 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 if isinstance(mark_result, tuple) and len(mark_result) >= 3:
                     result_dict = mark_result[2]
                     is_valid = result_dict.get("is_valid", False)
-                    mark_area = result_dict.get("mark_area", 0.0)
-                    mark_area_mm = result_dict.get("mark_area_mm", mark_area * pixel_size * pixel_size)
-                    
                     allow_mark = self.local_params.get("allow_mark", False)
                     result_text += f"【Mark检测】\n"
                     per_roi = result_dict.get("per_roi") or []
@@ -361,15 +355,26 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                         result_text += f"聚合({'AND' if allow_mark else 'OR'}) is_valid={is_valid}\n"
                         for pr in per_roi:
                             iv = pr.get("is_valid", False)
-                            result_text += f"  ROI{pr.get('index', 0) + 1}: {'有Mark' if iv else '无Mark'}\n"
+                            idx = pr.get("index", 0) + 1
+                            a = float(pr.get("mark_area", 0.0))
+                            amm = float(
+                                pr.get("mark_area_mm", a * pixel_size * pixel_size)
+                            )
+                            st = "有Mark" if iv else "无Mark"
+                            result_text += f"  ROI{idx}: {st}, 面积 {a:.1f}像素² ({amm:.2f}mm²)\n"
+                    else:
+                        mark_area = result_dict.get("mark_area", 0.0)
+                        mark_area_mm = result_dict.get(
+                            "mark_area_mm", mark_area * pixel_size * pixel_size
+                        )
+                        if mark_area > 0:
+                            result_text += f"Mark面积: {mark_area:.1f}像素² ({mark_area_mm:.2f}mm²)\n"
+                        else:
+                            result_text += f"Mark面积: 未检测到\n"
                     if allow_mark:
                         result_text += f"判定: {'OK (Mark齐全)' if is_valid else 'NG (Mark不全)'}\n"
                     else:
                         result_text += f"判定: {'NG (检测到Mark)' if is_valid else 'OK (未检测到Mark)'}\n"
-                    if mark_area > 0:
-                        result_text += f"Mark面积合计: {mark_area:.1f}像素² ({mark_area_mm:.2f}mm²)\n"
-                    else:
-                        result_text += f"Mark面积: 未检测到\n"
                     result_text += "\n"
             except Exception as e:
                 result_text += f"【Mark检测】\n"
@@ -637,18 +642,19 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 })
             
             #————————————————————————mark参数——————————————————————
+            self._migrate_mark_roi_min_areas()
             min_threshold_mark = self.local_params["min_threshold_mark"]
             max_threshold_mark = self.local_params["max_threshold_mark"]
-            min_mark_area = self.local_params["min_mark_area"]
             mark_rois = self.local_params.get("mark_rois", [])
+            mark_roi_min_areas = list(self.local_params.get("mark_roi_min_areas") or [])
             self.mark_detector.update_params(
                 {
                     "min_threshold": min_threshold_mark,
                     "max_threshold": max_threshold_mark,
-                    "min_mark_area": min_mark_area,
                     "pixel_size": pixel_size,
                     "mark_detect_mode": "manual",
                     "mark_rois": mark_rois,
+                    "mark_roi_min_areas": mark_roi_min_areas,
                     "allow_mark": self.local_params.get("allow_mark", False),
                 })
             #————————————————————————scratch参数——————————————————————
@@ -707,7 +713,6 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 self.horizontalSlider_4.setValue(int(max_threshold_size))
                 self.spinBox_threshold_min_mark_dry.setValue(int(min_threshold_mark))
                 self.spinBox_threshold_max_mark_dry.setValue(int(max_threshold_mark))
-                self.lineEdit_min_mak_area_dry.setText(str(min_mark_area))
                 self.horizontalSlider_threshold_min_mark_dry.setValue(int(min_threshold_mark))
                 self.horizontalSlider_threshold_max_mark_dry.setValue(int(max_threshold_mark))
                 self.spin_thresh_lower_scratch.setValue(int(min_threshold_scratch))
@@ -724,7 +729,6 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 if template is not None:
                     QApplication.processEvents()
                     self._update_template_display_with_markers()
-                self._sync_mark_roi_list_widget()
                 QApplication.processEvents()
                 QMessageBox.information(self, "成功", "参数已成功加载")
             
@@ -787,8 +791,6 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 self.local_params["min_threshold_mark"] = int(self.spinBox_threshold_min_mark_dry.value())
             if hasattr(self, 'spinBox_threshold_max_mark_dry'):
                 self.local_params["max_threshold_mark"] = int(self.spinBox_threshold_max_mark_dry.value())
-            if hasattr(self, 'lineEdit_min_mak_area_dry') and self.lineEdit_min_mak_area_dry.text().strip():
-                self.local_params["min_mark_area"] = int(float(self.lineEdit_min_mak_area_dry.text()))
             
             # 划痕检测参数
             if hasattr(self, 'spin_thresh_lower_scratch'):
@@ -855,7 +857,8 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 self.local_params["roi_block"] = []
             if "mark_rois" not in self.local_params:
                 self.local_params["mark_rois"] = []
-            self.local_params.pop("mark_roi", None)
+            if "mark_roi_min_areas" not in self.local_params:
+                self.local_params["mark_roi_min_areas"] = []
             if "ball_search_roi" not in self.local_params:
                 self.local_params["ball_search_roi"] = []
             if "scratch_roi" not in self.local_params:
@@ -931,6 +934,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 return
             mrs.append([int(x), int(y), int(w), int(h)])
             self.local_params["mark_rois"] = mrs
+            self._sync_mark_roi_min_areas_len()
         elif detect_type == "scratch":
             # 划痕检测区域：单个列表
             self.local_params["scratch_roi"] = [int(x), int(y), int(w), int(h)]
@@ -939,8 +943,6 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             return
         
         # 更新显示（包含所有标记）
-        if detect_type == "mark":
-            self._sync_mark_roi_list_widget()
         self._update_template_display_with_markers()
     
     def clear_check_roi(self,detect_type):
@@ -954,10 +956,10 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         }
         roi_key = roi_key_map.get(detect_type)
         self.local_params[roi_key] = []
+        if detect_type == "mark":
+            self.local_params["mark_roi_min_areas"] = []
 
         # 更新显示（移除区域标记）
-        if detect_type == "mark":
-            self._sync_mark_roi_list_widget()
         self._update_template_display_with_markers()
     
     def confirm_load(self):
@@ -976,12 +978,26 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             if len(self.local_params.get("mark_rois") or []) > 4:
                 QMessageBox.warning(self, "提示", "Mark ROI 最多 4 个。")
                 return
-            self.local_params.pop("mark_roi", None)
+            mrs = self.local_params.get("mark_rois") or []
+            if self.local_params.get("mark_check_enable") and len(mrs) >= 1:
+                areas = self.local_params.get("mark_roi_min_areas") or []
+                if len(areas) != len(mrs):
+                    QMessageBox.warning(
+                        self,
+                        "提示",
+                        "请在「检测区域管理」中为每个 Mark ROI 填写最小检出面积（像素）。",
+                    )
+                    return
+                for i, a in enumerate(areas):
+                    if not isinstance(a, int) or a < 0:
+                        QMessageBox.warning(
+                            self,
+                            "提示",
+                            f"ROI {i + 1} 的最小面积无效或未配置。",
+                        )
+                        return
+            self.local_params.pop("min_mark_area", None)
             self.config_manager.set_section("work_dry_params", self.local_params)
-            other = self.config_manager.get_section("work_transfer_params")
-            other["mark_rois"] = list(self.local_params.get("mark_rois", []))
-            other.pop("mark_roi", None)
-            self.config_manager.set_section("work_transfer_params", other)
             QMessageBox.information(self, "成功", "参数已成功保存")
         except Exception as e:
             QMessageBox.warning(self, "错误", f"保存参数失败: {str(e)}")

@@ -1,5 +1,5 @@
 from . import *
-from src.support.support_funs import ensure_gray_u8, normalize_mark_rois_in_params
+from src.support.support_funs import ensure_gray_u8
 
 
 # ==================== MarkDetector 类 ====================
@@ -13,7 +13,7 @@ class MarkDetector:
             params: 参数字典，包含以下键：
                 - min_threshold: int 二值化处理的最小阈值（手动模式）
                 - max_threshold: int 二值化处理的最大阈值
-                - min_mark_area: int Mark区域的最小面积（像素）
+                - mark_roi_min_areas: list[int] 与 mark_rois 等长，各 ROI 最小检出面积（像素）
                 - auto_threshold_factor: float 自动阈值因子，默认1.05
                 - pixel_size: float 像素尺寸（mm/pixel），默认0.001
                 - mark_detect_mode: "auto"或"manual"，默认"manual"
@@ -26,7 +26,7 @@ class MarkDetector:
         self.params = {
             "min_threshold": 0,
             "max_threshold": 255,
-            "min_mark_area": 0,
+            "mark_roi_min_areas": [],
             "auto_threshold_factor": 1.05,
             "pixel_size": 0.001,
             "mark_detect_mode": "manual",
@@ -36,8 +36,48 @@ class MarkDetector:
         if params:
             self.update_params(params)
 
-    def _detect_single_roi_mark(self, image_gray: np.ndarray, roi_rect) -> dict:
-        """对单个 ROI 执行二值化与轮廓检测。roi_rect: [x,y,w,h]。"""
+    def _coerce_mark_rois(self) -> None:
+        """将 params['mark_rois'] 规范为 [[x,y,w,h], ...]，不含旧键迁移。"""
+        mrs = self.params.get("mark_rois")
+        if mrs is None:
+            self.params["mark_rois"] = []
+            return
+        if not isinstance(mrs, list):
+            self.params["mark_rois"] = []
+            return
+        cleaned = []
+        for item in mrs:
+            if isinstance(item, (list, tuple)) and len(item) >= 4:
+                try:
+                    cleaned.append(
+                        [int(item[0]), int(item[1]), int(item[2]), int(item[3])]
+                    )
+                except (TypeError, ValueError):
+                    continue
+        self.params["mark_rois"] = cleaned
+
+    def _coerce_mark_roi_min_areas(self) -> None:
+        """与 mark_rois 等长的非负整数列表；不足则补 -1 表示未配置。"""
+        mrs = self.params.get("mark_rois") or []
+        raw = self.params.get("mark_roi_min_areas")
+        if not isinstance(raw, list):
+            self.params["mark_roi_min_areas"] = [-1] * len(mrs)
+            return
+        out = []
+        for i in range(len(mrs)):
+            if i < len(raw):
+                try:
+                    out.append(int(raw[i]))
+                except (TypeError, ValueError):
+                    out.append(-1)
+            else:
+                out.append(-1)
+        self.params["mark_roi_min_areas"] = out
+
+    def _detect_single_roi_mark(
+        self, image_gray: np.ndarray, roi_rect, min_mark_area: int
+    ) -> dict:
+        """对单个 ROI 执行二值化与轮廓检测。roi_rect: [x,y,w,h]；min_mark_area 为该 ROI 最小面积。"""
         h_img, w_img = image_gray.shape[:2]
         try:
             x, y, roi_w, roi_h = (
@@ -71,7 +111,6 @@ class MarkDetector:
 
         min_threshold = self.params.get("min_threshold", 0)
         max_threshold = self.params.get("max_threshold", 255)
-        min_mark_area = self.params.get("min_mark_area", 0)
         auto_threshold_factor = self.params.get("auto_threshold_factor", 1.05)
         mark_detect_mode = self.params.get("mark_detect_mode", "manual")
         pixel_size = self.params.get("pixel_size", 0.001)
@@ -131,6 +170,7 @@ class MarkDetector:
 
         mark_rois = self.params.get("mark_rois") or []
         allow_mark = bool(self.params.get("allow_mark", False))
+        areas = self.params.get("mark_roi_min_areas") or []
 
         if not mark_rois:
             return True, "未配置Mark ROI", {
@@ -141,9 +181,29 @@ class MarkDetector:
                 "mark_area_mm": 0.0,
             }
 
+        if len(mark_rois) != len(areas):
+            return False, "Mark 参数长度不一致：mark_rois 与 mark_roi_min_areas 数量需相同", {
+                "is_valid": False,
+                "per_roi": [],
+                "mark_contour": None,
+                "mark_area": 0.0,
+                "mark_area_mm": 0.0,
+            }
+
+        for i, a in enumerate(areas):
+            if not isinstance(a, int) or a < 0:
+                return False, f"无效的 Mark ROI 最小面积（索引 {i}）", {
+                    "is_valid": False,
+                    "per_roi": [],
+                    "mark_contour": None,
+                    "mark_area": 0.0,
+                    "mark_area_mm": 0.0,
+                }
+
         per_roi = []
         for i, roi_rect in enumerate(mark_rois):
-            one = self._detect_single_roi_mark(image_gray, roi_rect)
+            min_a = int(areas[i])
+            one = self._detect_single_roi_mark(image_gray, roi_rect, min_a)
             per_roi.append(
                 {
                     "index": i,
@@ -185,11 +245,12 @@ class MarkDetector:
         }
 
     def update_params(self, params: dict):
-        """更新检测器参数（仅接受已知键；支持 mark_rois / allow_mark）。"""
+        """更新检测器参数（仅接受已知键；支持 mark_rois / allow_mark / mark_roi_min_areas）。"""
         for key, value in params.items():
-            if key in self.params or key in ("mark_rois", "allow_mark"):
+            if key in self.params or key in ("mark_rois", "allow_mark", "mark_roi_min_areas"):
                 self.params[key] = value
-        normalize_mark_rois_in_params(self.params)
+        self._coerce_mark_rois()
+        self._coerce_mark_roi_min_areas()
         return True, "参数更新成功"
 
     def get_params(self):

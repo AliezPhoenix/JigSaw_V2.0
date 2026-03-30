@@ -1,5 +1,6 @@
 import numpy as np
 import threading
+import time
 from ctypes import *
 from tools.MvImport.MvCameraControl_class import MvCamera
 from tools.MvImport.CameraParams_const import *
@@ -513,24 +514,29 @@ class ModBus_Manager:
         elif function_code == cst.WRITE_MULTIPLE_REGISTERS:
             # 写入多个寄存器，最大单次传输长度为123
             if len(value_list) > self.MAX_REGISTERS:
-                # 需要分批写入
                 num_batches = (len(value_list) + self.MAX_REGISTERS - 1) // self.MAX_REGISTERS
                 for batch_index in range(num_batches):
                     batch_start = batch_index * self.MAX_REGISTERS
                     batch_end = min(batch_start + self.MAX_REGISTERS, len(value_list))
                     batch_value_list = value_list[batch_start:batch_end]
                     current_address = address + batch_start
-                    
                     try:
-                        master.execute(1, function_code, current_address, batch_value_list)
+                        master.execute(
+                            1,
+                            function_code,
+                            current_address,
+                            len(batch_value_list),
+                            batch_value_list,
+                        )
                     except Exception as e:
                         return False, e
-                
+                    # 与旧工程 WorkThread：每批成功后 sleep（含最后一批，再交由上层写完成线圈）
+                    time.sleep(0.01)
                 return True, None
             else:
                 # 单次写入即可
                 try:
-                    master.execute(1, function_code, address, value_list)
+                    master.execute(1, function_code, address, len(value_list), value_list)
                     return True, None
                 except Exception as e:
                     return False, e

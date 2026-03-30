@@ -121,10 +121,7 @@
      <property name="title">
       <string>模板及参数</string>
      </property>
-     <layout class="QVBoxLayout" name="right_layout" stretch="3,0,0,0,0,0,0,0,0,0">
-      <property name="spacing">
-       <number>6</number>
-      </property>
+     <layout class="QGridLayout" name="gridLayout_9">
       <property name="leftMargin">
        <number>9</number>
       </property>
@@ -137,144 +134,50 @@
       <property name="bottomMargin">
        <number>0</number>
       </property>
-      <item>
-       <widget class="QLabel" name="template_image_label">
-        <property name="sizePolicy">
-         <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-          <horstretch>0</horstretch>
-          <verstretch>1</verstretch>
-         </sizepolicy>
+      <item row="4" column="0">
+       <widget class="QPushButton" name="btn_clear_roi">
+        <property name="text">
+         <string>清除所有屏蔽区域</string>
         </property>
+       </widget>
+      </item>
+      <item row="9" column="0">
+       <widget class="QLabel" name="info_label">
+        <property name="styleSheet">
+         <string notr="true">color: white; padding: 5px;</string>
+        </property>
+        <property name="text">
+         <string>请加载测试图像和模板图像，然后运行测试</string>
+        </property>
+       </widget>
+      </item>
+      <item row="6" column="0">
+       <widget class="QPushButton" name="btn_run_test">
         <property name="minimumSize">
          <size>
           <width>0</width>
-          <height>200</height>
+          <height>0</height>
          </size>
         </property>
-        <property name="styleSheet">
-         <string notr="true">border: 1px solid gray; background-color: #2b2b2b;</string>
+        <property name="text">
+         <string>运行测试</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QPushButton" name="btn_ignore_roi">
+        <property name="minimumSize">
+         <size>
+          <width>0</width>
+          <height>0</height>
+         </size>
         </property>
         <property name="text">
-         <string>模板图像将显示在这里</string>
-        </property>
-        <property name="alignment">
-         <set>Qt::AlignCenter</set>
+         <string>框选屏蔽区域</string>
         </property>
        </widget>
       </item>
-      <item>
-       <layout class="QHBoxLayout" name="template_btn_layout">
-        <property name="spacing">
-         <number>6</number>
-        </property>
-        <item>
-         <widget class="QPushButton" name="btn_load_template">
-          <property name="text">
-           <string>选择模板图像</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <widget class="QPushButton" name="btn_load_params">
-          <property name="minimumSize">
-           <size>
-            <width>0</width>
-            <height>0</height>
-           </size>
-          </property>
-          <property name="text">
-           <string>参数载入</string>
-          </property>
-         </widget>
-        </item>
-        <item>
-         <spacer name="template_btn_spacer">
-          <property name="orientation">
-           <enum>Qt::Horizontal</enum>
-          </property>
-          <property name="sizeType">
-           <enum>QSizePolicy::Expanding</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>40</width>
-            <height>20</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
-       </layout>
-      </item>
-      <item>
-       <widget class="QGroupBox" name="groupBox_check_enable">
-        <property name="title">
-         <string>检测项目</string>
-        </property>
-        <layout class="QGridLayout" name="gridLayout_8">
-         <item row="1" column="1">
-          <widget class="QCheckBox" name="radioButton_scratch_check_enable">
-           <property name="text">
-            <string>划痕检测</string>
-           </property>
-           <property name="checked">
-            <bool>true</bool>
-           </property>
-          </widget>
-         </item>
-         <item row="0" column="2">
-          <widget class="QCheckBox" name="radioButton_shift_check_enable">
-           <property name="text">
-            <string>偏移检测</string>
-           </property>
-           <property name="checked">
-            <bool>true</bool>
-           </property>
-          </widget>
-         </item>
-         <item row="0" column="0">
-          <widget class="QCheckBox" name="radioButton_size_check_enable">
-           <property name="text">
-            <string>尺寸检测</string>
-           </property>
-           <property name="checked">
-            <bool>true</bool>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="2">
-          <widget class="QCheckBox" name="radioButton_dirts_check_enable">
-           <property name="text">
-            <string>脏污检测</string>
-           </property>
-           <property name="checked">
-            <bool>true</bool>
-           </property>
-          </widget>
-         </item>
-         <item row="0" column="1">
-          <widget class="QCheckBox" name="radioButton_ball_check_enable">
-           <property name="text">
-            <string>锡球检测</string>
-           </property>
-           <property name="checked">
-            <bool>true</bool>
-           </property>
-          </widget>
-         </item>
-         <item row="1" column="0">
-          <widget class="QCheckBox" name="radioButton_mark_check_enable">
-           <property name="text">
-            <string>Mark检测</string>
-           </property>
-           <property name="checked">
-            <bool>true</bool>
-           </property>
-          </widget>
-         </item>
-        </layout>
-       </widget>
-      </item>
-      <item>
+      <item row="3" column="0" colspan="2">
        <widget class="QTabWidget" name="tabWidget">
         <property name="sizePolicy">
          <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
@@ -577,39 +480,10 @@
              <string>参数设置</string>
             </property>
             <layout class="QGridLayout" name="gridLayout_6">
-             <item row="5" column="3">
-              <widget class="QLabel" name="label_mark_roi_color">
-               <property name="minimumSize">
-                <size>
-                 <width>20</width>
-                 <height>20</height>
-                </size>
-               </property>
-               <property name="maximumSize">
-                <size>
-                 <width>20</width>
-                 <height>20</height>
-                </size>
-               </property>
-               <property name="styleSheet">
-                <string notr="true">background-color: rgb(0, 0, 255); border: 1px solid gray;</string>
-               </property>
+             <item row="4" column="1" colspan="4">
+              <widget class="QPushButton" name="pushButton_manage_mark_roi_dry">
                <property name="text">
-                <string/>
-               </property>
-              </widget>
-             </item>
-             <item row="5" column="4">
-              <widget class="QPushButton" name="pushButton__clear_mark_roi_dry">
-               <property name="text">
-                <string>清除检测区域</string>
-               </property>
-              </widget>
-             </item>
-             <item row="3" column="2">
-              <widget class="QSpinBox" name="spinBox_threshold_max_mark_dry">
-               <property name="maximum">
-                <number>255</number>
+                <string>检测区域管理</string>
                </property>
               </widget>
              </item>
@@ -617,23 +491,6 @@
               <widget class="QLabel" name="label_7">
                <property name="text">
                 <string>Threshold上限:</string>
-               </property>
-              </widget>
-             </item>
-             <item row="3" column="1">
-              <widget class="QSlider" name="horizontalSlider_threshold_max_mark_dry">
-               <property name="maximum">
-                <number>255</number>
-               </property>
-               <property name="orientation">
-                <enum>Qt::Horizontal</enum>
-               </property>
-              </widget>
-             </item>
-             <item row="5" column="2">
-              <widget class="QPushButton" name="pushButton_create_mark_roi_dry">
-               <property name="text">
-                <string>框选检测区域</string>
                </property>
               </widget>
              </item>
@@ -651,31 +508,19 @@
                </property>
               </widget>
              </item>
-             <item row="5" column="1">
-              <spacer name="horizontalSpacer_2">
-               <property name="orientation">
-                <enum>Qt::Horizontal</enum>
+             <item row="4" column="0">
+              <widget class="QLabel" name="label_mark_roi_manage_dry">
+               <property name="text">
+                <string>检测区域：</string>
                </property>
-               <property name="sizeHint" stdset="0">
-                <size>
-                 <width>40</width>
-                 <height>20</height>
-                </size>
-               </property>
-              </spacer>
+              </widget>
              </item>
-             <item row="5" column="0">
-              <spacer name="horizontalSpacer">
-               <property name="orientation">
-                <enum>Qt::Horizontal</enum>
+             <item row="3" column="2">
+              <widget class="QSpinBox" name="spinBox_threshold_max_mark_dry">
+               <property name="maximum">
+                <number>255</number>
                </property>
-               <property name="sizeHint" stdset="0">
-                <size>
-                 <width>40</width>
-                 <height>20</height>
-                </size>
-               </property>
-              </spacer>
+              </widget>
              </item>
              <item row="1" column="1">
               <widget class="QSlider" name="horizontalSlider_threshold_min_mark_dry">
@@ -687,15 +532,15 @@
                </property>
               </widget>
              </item>
-             <item row="4" column="0">
-              <widget class="QLabel" name="label_9">
-               <property name="text">
-                <string>最小mark面积：</string>
+             <item row="3" column="1">
+              <widget class="QSlider" name="horizontalSlider_threshold_max_mark_dry">
+               <property name="maximum">
+                <number>255</number>
+               </property>
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
                </property>
               </widget>
-             </item>
-             <item row="4" column="1">
-              <widget class="QLineEdit" name="lineEdit_min_mak_area_dry"/>
              </item>
             </layout>
            </widget>
@@ -1007,60 +852,154 @@ p, li { white-space: pre-wrap; }
         </widget>
        </widget>
       </item>
-      <item>
-       <widget class="QPushButton" name="btn_clear_roi">
-        <property name="text">
-         <string>清除所有屏蔽区域</string>
+      <item row="2" column="0" colspan="2">
+       <widget class="QGroupBox" name="groupBox_check_enable">
+        <property name="title">
+         <string>检测项目</string>
         </property>
+        <layout class="QGridLayout" name="gridLayout_8">
+         <item row="1" column="1">
+          <widget class="QCheckBox" name="radioButton_scratch_check_enable">
+           <property name="text">
+            <string>划痕检测</string>
+           </property>
+           <property name="checked">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="2">
+          <widget class="QCheckBox" name="radioButton_shift_check_enable">
+           <property name="text">
+            <string>偏移检测</string>
+           </property>
+           <property name="checked">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="0">
+          <widget class="QCheckBox" name="radioButton_size_check_enable">
+           <property name="text">
+            <string>尺寸检测</string>
+           </property>
+           <property name="checked">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="2">
+          <widget class="QCheckBox" name="radioButton_dirts_check_enable">
+           <property name="text">
+            <string>脏污检测</string>
+           </property>
+           <property name="checked">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QCheckBox" name="radioButton_ball_check_enable">
+           <property name="text">
+            <string>锡球检测</string>
+           </property>
+           <property name="checked">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="0">
+          <widget class="QCheckBox" name="radioButton_mark_check_enable">
+           <property name="text">
+            <string>Mark检测</string>
+           </property>
+           <property name="checked">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+        </layout>
        </widget>
       </item>
-      <item>
-       <widget class="QPushButton" name="btn_ignore_roi">
+      <item row="0" column="0" colspan="2">
+       <widget class="QLabel" name="template_image_label">
+        <property name="sizePolicy">
+         <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+          <horstretch>0</horstretch>
+          <verstretch>1</verstretch>
+         </sizepolicy>
+        </property>
         <property name="minimumSize">
          <size>
           <width>0</width>
-          <height>0</height>
+          <height>200</height>
          </size>
         </property>
+        <property name="styleSheet">
+         <string notr="true">border: 1px solid gray; background-color: #2b2b2b;</string>
+        </property>
         <property name="text">
-         <string>框选屏蔽区域</string>
+         <string>模板图像将显示在这里</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignCenter</set>
         </property>
        </widget>
       </item>
-      <item>
-       <widget class="QPushButton" name="btn_run_test">
-        <property name="minimumSize">
-         <size>
-          <width>0</width>
-          <height>0</height>
-         </size>
+      <item row="1" column="0" colspan="2">
+       <layout class="QHBoxLayout" name="template_btn_layout">
+        <property name="spacing">
+         <number>6</number>
         </property>
-        <property name="text">
-         <string>运行测试</string>
-        </property>
-       </widget>
+        <item>
+         <widget class="QPushButton" name="btn_load_template">
+          <property name="text">
+           <string>选择模板图像</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btn_load_params">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>0</height>
+           </size>
+          </property>
+          <property name="text">
+           <string>参数载入</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="template_btn_spacer">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeType">
+           <enum>QSizePolicy::Expanding</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
       </item>
-      <item>
+      <item row="6" column="1">
        <widget class="QPushButton" name="btn_confirm_load">
         <property name="text">
          <string>确认</string>
         </property>
        </widget>
       </item>
-      <item>
+      <item row="7" column="1">
        <widget class="QPushButton" name="btn_close">
         <property name="text">
          <string>关闭</string>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QLabel" name="info_label">
-        <property name="styleSheet">
-         <string notr="true">color: white; padding: 5px;</string>
-        </property>
-        <property name="text">
-         <string>请加载测试图像和模板图像，然后运行测试</string>
         </property>
        </widget>
       </item>

@@ -75,36 +75,6 @@ def sanitize_filename_part(s: str) -> str:
     return s[:64] if s else "unknown"
 
 
-def normalize_mark_rois_in_params(params: dict) -> None:
-    """
-    将旧键 mark_roi 迁移为 mark_rois，并从 params 中删除 mark_roi。
-    mark_rois 为 [[x,y,w,h], ...]，最多由上层 UI 限制为 4 个。
-    """
-    legacy = params.pop("mark_roi", None)
-    mrs = params.get("mark_rois")
-    if legacy is not None and (not mrs or (isinstance(mrs, list) and len(mrs) == 0)):
-        if isinstance(legacy, list) and len(legacy) == 4:
-            try:
-                params["mark_rois"] = [
-                    [int(legacy[0]), int(legacy[1]), int(legacy[2]), int(legacy[3])]
-                ]
-            except (TypeError, ValueError):
-                params["mark_rois"] = []
-    if "mark_rois" not in params or params["mark_rois"] is None:
-        params["mark_rois"] = []
-    cleaned = []
-    if isinstance(params["mark_rois"], list):
-        for item in params["mark_rois"]:
-            if isinstance(item, (list, tuple)) and len(item) >= 4:
-                try:
-                    cleaned.append(
-                        [int(item[0]), int(item[1]), int(item[2]), int(item[3])]
-                    )
-                except (TypeError, ValueError):
-                    continue
-    params["mark_rois"] = cleaned
-
-
 def ensure_gray_u8(image: np.ndarray, *, copy: bool = True) -> np.ndarray:
     """
     将常见格式的图像 ndarray 转为单通道灰度 (H, W)，uint8。

@@ -39,7 +39,7 @@ brainstorm: docs/brainstorms/2026-03-30-mark-multi-roi-brainstorm.md
 4. **配置持久化**  
    - **仅键名 `mark_rois`**；`work_dry_params` / `work_transfer_params`（及 `config_manager` 读写路径）**删除对 `mark_roi` 的读写**。  
    - **共用策略**：保存时将**同一份** `mark_rois` 双写到 **`work_dry_params` 与 `work_transfer_params`**。  
-   - **升级迁移（一次性，可选）**：若旧 ini 仍存在 `mark_roi` 而无 `mark_rois`，启动或首次保存时可转换为 `mark_rois = [[x,y,w,h]]` 并**从配置中移除 `mark_roi` 键**；新保存的 ini **不得再含 `mark_roi`**。
+   - **配置**：旧键 `mark_roi` 由人工编辑 JSON（如 `config/config_2.0.json`）改为 `mark_rois`，**不在代码中做自动迁移**。
 
 5. **UI（Dry / Transfer 参数对话框）**  
    - [`DryPramasSetDialog.py`](DryPramasSetDialog.py)、[`TransferPramasSetDialog.py`](TransferPramasSetDialog.py)：`local_params["mark_rois"]` 为列表；**追加框选**向列表 append（≤4）；**删除**支持移除指定项或清空；预览绘制**多矩形**（颜色区分或序号）。  
@@ -59,7 +59,7 @@ brainstorm: docs/brainstorms/2026-03-30-mark-multi-roi-brainstorm.md
 | 聚合与 `allow_mark` | 必须在检测器内完成，因单布尔 `is_valid` 在 dry（OR）与 transfer（AND）下语义不同。 |
 | 性能 | 最多 4 ROI，开销可接受。 |
 | 配置重复 | 两 `work_*_section` 写入相同 `mark_rois`，避免干燥/移栽几何漂移。 |
-| 旧键残留 | 保存/迁移时显式删除 `mark_roi`，避免与 `mark_rois` 并存。 |
+| 旧键残留 | 配方 JSON 仅保留 `mark_rois`，编辑配置时删除 `mark_roi`。 |
 
 ## Acceptance Criteria
 
@@ -111,6 +111,6 @@ brainstorm: docs/brainstorms/2026-03-30-mark-multi-roi-brainstorm.md
 
 ## Post-Deploy Monitoring & Validation
 
-- **日志/界面**：升级后 ini 仅含 `mark_rois`；若做过一次性迁移，确认旧单框已转为列表且 `mark_roi` 已删除。  
+- **日志/界面**：加载的配方 JSON 中 `work_*_params` 仅含 `mark_rois`。  
 - **产线**：干燥任一侧假 Mark、移栽缺一侧 Mark 是否按预期 NG。  
 - 无云端发布时：`No additional operational monitoring required: 本地工位软件与 ini 配置变更。`
