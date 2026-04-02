@@ -321,9 +321,42 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             self.config_manager.set_key("work_fulltray_params", "rows", int(self.lineEdit_fulltray_row_nums.text()))
             self.config_manager.set_key("work_fulltray_params", "cols", int(self.lineEdit_fulltray_col_nums.text()))
             self.config_manager.set_key("work_fulltray_params", "model_path", self.lineEdit_fulltray_model_path.text().strip())
+
+            # 确认参数时同步 search_roi：与当前预览图尺寸一致（无效 ROI 退化为整幅图，有效 ROI 裁剪到图内）
+            for _station, _section in (
+                ("dry", "work_dry_params"),
+                ("transfer", "work_transfer_params"),
+                ("fulltray", "work_fulltray_params"),
+            ):
+                _img = self.current_image.get(_station)
+                if _img is None or not hasattr(_img, "shape") or len(_img.shape) < 2:
+                    continue
+                _ih, _iw = int(_img.shape[0]), int(_img.shape[1])
+                if _iw <= 0 or _ih <= 0:
+                    continue
+                _roi = self.config_manager.get_key(_section, "search_roi", [])
+                _out = self._normalize_search_roi_to_image(_roi, _iw, _ih)
+                if _out is not None:
+                    self.config_manager.set_key(_section, "search_roi", _out)
         except (ValueError, AttributeError) as e:
             print(f"_update_config_from_ui 解析错误: {e}")
             raise
+
+    @staticmethod
+    def _normalize_search_roi_to_image(roi, img_w: int, img_h: int):
+        """将 search_roi 限制在图像范围内；无效时退化为 [0,0,w,h]。"""
+        if img_w <= 0 or img_h <= 0:
+            return None
+        if not isinstance(roi, (list, tuple)) or len(roi) < 4:
+            return [0, 0, img_w, img_h]
+        x, y, w, h = int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3])
+        if w <= 0 or h <= 0:
+            return [0, 0, img_w, img_h]
+        x = max(0, min(x, img_w - 1))
+        y = max(0, min(y, img_h - 1))
+        w = max(1, min(w, img_w - x))
+        h = max(1, min(h, img_h - y))
+        return [x, y, w, h]
 
     def _update_ui_from_config(self):
 
@@ -488,12 +521,14 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             dt._update_image_signal.connect(lambda img, bga: self._update_display("dry", img, bga))
             dt._update_statistics_signal.connect(lambda stats: self._update_statistics("dry", stats))
             dt._update_message_signal.connect(lambda msg: self._update_message("dry", msg))
+            dt._strip_choice_prompt_signal.connect(self._on_strip_choice_prompt)
         # transfer_thread
         tt = t.get_thread_obj("transfer_thread")
         if tt:
             tt._update_image_signal.connect(lambda img, bga: self._update_display("transfer", img, bga))
             tt._update_statistics_signal.connect(lambda stats: self._update_statistics("transfer", stats))
             tt._update_message_signal.connect(lambda msg: self._update_message("transfer", msg))
+            tt._strip_choice_prompt_signal.connect(self._on_strip_choice_prompt)
         # sucker_thread_1
         s1 = t.get_thread_obj("sucker_thread_1")
         if s1:
@@ -953,6 +988,22 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
     def _update_message(self, station: str, msg: str):
         pass
 
+    def _on_strip_choice_prompt(self, station: str):
+        """strip 结束存在 NG 时提示操作员在分选机选择（非模态，避免阻塞 UI）。"""
+        title = "提示（干燥台）" if station == "dry" else "提示（转移台）"
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setText("请在分选机页面上选择处理方案")
+        box.setIcon(QMessageBox.NoIcon)
+        box.setStandardButtons(QMessageBox.Yes)
+        box.setModal(False)
+        box.setMinimumSize(520, 200)
+        box.setStyleSheet(
+            "QMessageBox { background-color: #FF9800; }"
+            "QMessageBox QLabel { color: #212121; font-size: 20px; font-weight: bold; padding: 28px; min-width: 440px; }"
+        )
+        box.show()
+
     # =============================================================================
     # 7. BGA 显示
     # =============================================================================
@@ -1229,6 +1280,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             )
             if drawn_patch is not None:
                 image_result[y:y + template_h, x:x + template_w] = drawn_patch
+                image_result = cv.rectangle(image_result, (x, y), (x + template_w, y + template_h), (0, 255, 255), 4)
         cv.putText(image_result, f"Search ROI", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
         cv.rectangle(image_result, (search_roi[0], search_roi[1]), (search_roi[0] + search_roi[2], search_roi[1] + search_roi[3]), (255, 255, 0), 5)
         self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), image_result)

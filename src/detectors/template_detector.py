@@ -47,11 +47,11 @@ class TemplateDetector:
             match_points.append((x,y,confidence))
 
         match_points.sort(key=lambda x: x[2], reverse=True)
-        min_distence = min(template_height/2, template_width/2) ### 采取二分之一的模板宽度作为最小距离
+        min_distence = max((template_height/3)*2, (template_width/3)*2) ### 采取三分之二的模板宽度和高度作为最小距离
   
         for x, y ,confidence in match_points:
             too_close = False
-            for existing_x, existing_y in result_list:
+            for existing_x, existing_y,_ in result_list:
                 distance = np.sqrt((x - existing_x)**2 + (y - existing_y)**2)
                 if distance < min_distence:
                     too_close = True

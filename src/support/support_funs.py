@@ -1,4 +1,7 @@
+from itertools import product
 import re
+from typing import Dict, List, Sequence, Union
+
 import numpy as np
 import cv2 as cv
 import datetime
@@ -352,6 +355,7 @@ class Bga_Strip():
         """
         将二维 slot 中每格的产品结果写入 full_value 当前窗口切片内值为 99 的格；
         slot[行][列] 与窗口棋盘一致，None 表示该格未检出，保持 99。
+        accumulated_log_info 仅对本切片内值为 99 的格各记一条（与写入棋盘的目标格一致），不遍历整窗。
 
         参数:
             slot: List[List[Optional[dict]]]，形状为 window_rows × window_cols，与 params 中 current_row/current_col 一致
@@ -364,39 +368,18 @@ class Bga_Strip():
 
         if slot is None:
             print("警告: slot 为 None，本帧棋盘不写值，按格记日志为 Empty")
-            for gr in range(self.window_rows):
-                for gc in range(self.window_cols):
-                    self.accumulated_log_info.append(
-                        _vacant_log_entry(len(self.accumulated_log_info) + 1, gr, gc)
-                    )
-            self.image_dict[self.position_list[self.count][0:2]] = current_image
-            self.count += 1
             return
 
         if not _is_bga_product_slot(slot):
             print("错误: write 需要二维 slot [行][列]（与 current_row × current_col 一致），按格记日志为 Empty")
-            for gr in range(self.window_rows):
-                for gc in range(self.window_cols):
-                    self.accumulated_log_info.append(
-                        _vacant_log_entry(len(self.accumulated_log_info) + 1, gr, gc)
-                    )
             self.image_dict[self.position_list[self.count][0:2]] = current_image
             self.count += 1
             return
 
-        if (
-            len(slot) != self.window_rows
-            or any(len(row) != self.window_cols for row in slot)
-        ):
+        if ( len(slot) != self.window_rows or any(len(row) != self.window_cols for row in slot)):
             print(
                 f"错误: slot 维度 {len(slot)}×{len(slot[0]) if slot else 0} "
-                f"与窗口 {self.window_rows}×{self.window_cols} 不符，本帧不写值，按格记日志为 Empty"
-            )
-            for gr in range(self.window_rows):
-                for gc in range(self.window_cols):
-                    self.accumulated_log_info.append(
-                        _vacant_log_entry(len(self.accumulated_log_info) + 1, gr, gc)
-                    )
+                f"与窗口 {self.window_rows}×{self.window_cols} 不符，本帧不写值，按格记日志为 Empty")
             self.image_dict[self.position_list[self.count][0:2]] = current_image
             self.count += 1
             return
@@ -413,12 +396,7 @@ class Bga_Strip():
 
         # 验证调整后的范围有效性
         if row_end <= row_start or col_end <= col_start:
-            print(f"错误: 调整后的切片范围无效: ({row_start}, {col_start}) 到 ({row_end}, {col_end})，按格记日志为 Empty")
-            for gr in range(self.window_rows):
-                for gc in range(self.window_cols):
-                    self.accumulated_log_info.append(
-                        _vacant_log_entry(len(self.accumulated_log_info) + 1, gr, gc)
-                    )
+            print(f"错误: 调整后的切片范围无效: ({row_start}, {col_start}) 到 ({row_end}, {col_end})")
             self.image_dict[pos[0:2]] = current_image
             self.count += 1
             return
@@ -433,12 +411,7 @@ class Bga_Strip():
         ]
 
         if not target_positions:
-            print("警告: 切片中没有值为99的位置，跳过棋盘写入")
-            for gr in range(self.window_rows):
-                for gc in range(self.window_cols):
-                    self.accumulated_log_info.append(
-                        _vacant_log_entry(len(self.accumulated_log_info) + 1, gr, gc)
-                    )
+            print("警告: 切片中没有值为99的位置，跳过棋盘写入，本帧不写日志条目")
             self.image_dict[pos[0:2]] = current_image
             self.count += 1
             return
@@ -472,84 +445,83 @@ class Bga_Strip():
         # 将修改后的切片写回full_value
         self.full_value[row_start:row_end, col_start:col_end] = full_slice
 
-        # 将产品检测信息转换为日志格式并存储（缺检格记为 defect_type: Empty）
-        for gr in range(self.window_rows):
-            for gc in range(self.window_cols):
-                product_info = slot[gr][gc]
-                if product_info is None:
-                    self.accumulated_log_info.append(
-                        _vacant_log_entry(len(self.accumulated_log_info) + 1, gr, gc)
-                    )
-                    continue
-                log_entry = {}
+        # 将产品检测信息转换为日志格式并存储（仅对与 full_value 中 99 格对应的格写入；缺检记 Empty）
+        for row, col in target_positions:
+            product_info = slot[row][col]
+            if product_info is None:
+                self.accumulated_log_info.append(
+                    _vacant_log_entry(len(self.accumulated_log_info) + 1, row, col)
+                )
+                continue
+            log_entry = {}
 
-                # 产品序号
-                log_entry["product_index"] = len(self.accumulated_log_info) + 1
+            # 产品序号
+            log_entry["product_index"] = len(self.accumulated_log_info) + 1
 
-                # 尺寸信息
-                size_result = product_info.get("size_result")
-                if size_result and len(size_result) > 2:
-                    size_data = size_result[2]
-                    width_mm = size_data.get("width", None)
-                    height_mm = size_data.get("height", None)
-                    log_entry["size"] = (
-                        [width_mm, height_mm]
-                        if width_mm is not None and height_mm is not None
-                        else [None, None]
-                    )
-                else:
-                    log_entry["size"] = [None, None]
+            # 尺寸信息
+            size_result = product_info.get("size_result")
+            if size_result and len(size_result) > 2:
+                size_data = size_result[2]
+                width_mm = size_data.get("width", None)
+                height_mm = size_data.get("height", None)
+                log_entry["size"] = (
+                    [width_mm, height_mm]
+                    if width_mm is not None and height_mm is not None
+                    else [None, None]
+                )
+            else:
+                log_entry["size"] = [None, None]
 
-                # Mark信息
-                mark_result = product_info.get("mark_result")
-                if mark_result and len(mark_result) > 2:
-                    mark_data = mark_result[2]
-                    # 如果mark_result存在且is_valid为True，则表示检测到Mark（有Mark）
-                    log_entry["has_mark"] = mark_data.get("is_valid", False)
-                else:
-                    log_entry["has_mark"] = False
+            # Mark信息
+            mark_result = product_info.get("mark_result")
+            if mark_result and len(mark_result) > 2:
+                mark_data = mark_result[2]
+                # 如果mark_result存在且is_valid为True，则表示检测到Mark（有Mark）
+                log_entry["has_mark"] = mark_data.get("is_valid", False)
+            else:
+                log_entry["has_mark"] = False
 
-                # 球信息
-                ball_result = product_info.get("ball_result")
-                ok_balls = []
-                ng_balls = []
-                if ball_result and len(ball_result) > 2:
-                    ball_data = ball_result[2]
-                    ok_details = ball_data.get("ok_details", [])
-                    ng_details = ball_data.get("ng_details", [])
+            # 球信息
+            ball_result = product_info.get("ball_result")
+            ok_balls = []
+            ng_balls = []
+            if ball_result and len(ball_result) > 2:
+                ball_data = ball_result[2]
+                ok_details = ball_data.get("ok_details", [])
+                ng_details = ball_data.get("ng_details", [])
 
-                    # 提取合格球信息
-                    for ball in ok_details:
-                        ok_balls.append({
-                            "radius_mm": ball.get("radius_mm"),
-                            "area_mm2": ball.get("area_mm", 0.0)  # 使用area_mm作为area_mm2
-                        })
+                # 提取合格球信息
+                for ball in ok_details:
+                    ok_balls.append({
+                        "radius_mm": ball.get("radius_mm"),
+                        "area_mm2": ball.get("area_mm", 0.0)  # 使用area_mm作为area_mm2
+                    })
 
-                    # 提取不合格球信息
-                    for ball in ng_details:
-                        ng_balls.append({
-                            "radius_mm": ball.get("radius_mm"),
-                            "area_mm2": ball.get("area_mm", 0.0)  # 使用area_mm作为area_mm2
-                        })
+                # 提取不合格球信息
+                for ball in ng_details:
+                    ng_balls.append({
+                        "radius_mm": ball.get("radius_mm"),
+                        "area_mm2": ball.get("area_mm", 0.0)  # 使用area_mm作为area_mm2
+                    })
 
-                log_entry["ok_balls"] = ok_balls
-                log_entry["ng_balls"] = ng_balls
+            log_entry["ok_balls"] = ok_balls
+            log_entry["ng_balls"] = ng_balls
 
-                # 偏移量信息
-                shift_result = product_info.get("shift_result")
-                if shift_result and len(shift_result) > 2:
-                    shift_data = shift_result[2]
-                    log_entry["shift_x"] = shift_data.get("shift_x", None)
-                    log_entry["shift_y"] = shift_data.get("shift_y", None)
-                else:
-                    log_entry["shift_x"] = None
-                    log_entry["shift_y"] = None
+            # 偏移量信息
+            shift_result = product_info.get("shift_result")
+            if shift_result and len(shift_result) > 2:
+                shift_data = shift_result[2]
+                log_entry["shift_x"] = shift_data.get("shift_x", None)
+                log_entry["shift_y"] = shift_data.get("shift_y", None)
+            else:
+                log_entry["shift_x"] = None
+                log_entry["shift_y"] = None
 
-                # 缺陷类型
-                log_entry["defect_type"] = product_info.get("defect_type", ["OK"])
+            # 缺陷类型
+            log_entry["defect_type"] = product_info.get("defect_type", ["OK"])
 
-                # 添加到累积日志信息
-                self.accumulated_log_info.append(log_entry)
+            # 添加到累积日志信息
+            self.accumulated_log_info.append(log_entry)
         
         # 保存图像并更新计数
         self.image_dict[pos[0:2]] = current_image
@@ -1698,3 +1670,65 @@ def fulltray_predict_single_image(model, image_input, device='cpu', input_size=1
         confidence, predicted = torch.max(probabilities, 1)
 
     return predicted.item(), confidence.item()
+
+
+_SECTOR_REMAP_ORDER = ("sector_1", "sector_2", "sector_3")
+_SECTOR_TARGET_CODE = {"sector_1": 3, "sector_2": 4, "sector_3": 5}
+_SECTOR_MASK_BITS = 15
+# 掩码 bit0/1/2 不参与重映射（类型编号 0、1、2 保持不变）
+_SECTOR_SKIP_MASK_BITS = frozenset((0, 1, 2))
+
+
+def map_product_type_to_sector(
+    product_list: Union[Sequence[int], np.ndarray],
+    ng_sector_dict: Dict[str, int],
+) -> Union[List[int], np.ndarray]:
+    """
+    按 PLC 分选区掩码将一维产品类型编号重映射为分选目标码。
+
+    Args:
+        product_list: 一维序列（或 ``np.ndarray``），元素为整型类型编号；**bit k 与类型编号 k 对应**（k=0..14）。
+            不修改传入对象，返回新序列。
+        ng_sector_dict: 例如 ``{"sector_1": int, "sector_2": int, "sector_3": int}``，值为 PLC 读出的整型。
+
+    Returns:
+        ``list`` 或 ``np.ndarray``：对每个 sector，将 ``value & 0x7FFF`` 作为 15 位掩码；
+        若 **bit k 为 1**（且 **k 不为 0、1、2**），则将所有当前值等于 **k** 的元素改为该 sector 的目标码：
+        ``sector_1 -> 3``，``sector_2 -> 4``，``sector_3 -> 5``。
+        类型编号 **0、1、2** 不因掩码参与重映射。
+        按 ``sector_1`` → ``sector_2`` → ``sector_3`` 顺序应用。
+    """
+    if ng_sector_dict is None:
+        ng_sector_dict = {}
+
+    if isinstance(product_list, np.ndarray):
+        out = np.copy(np.asarray(product_list))
+        flat = out.reshape(-1)
+        for name in _SECTOR_REMAP_ORDER:
+            if name not in ng_sector_dict:
+                continue
+            target = _SECTOR_TARGET_CODE.get(name)
+            if target is None:
+                continue
+            mask_val = int(ng_sector_dict[name]) & ((1 << _SECTOR_MASK_BITS) - 1)
+            for k in range(_SECTOR_MASK_BITS):
+                if k in _SECTOR_SKIP_MASK_BITS:
+                    continue
+                if (mask_val >> k) & 1:
+                    flat[flat == k] = target
+        return out
+
+    out_list = [int(x) for x in product_list]
+    for name in _SECTOR_REMAP_ORDER:
+        if name not in ng_sector_dict:
+            continue
+        target = _SECTOR_TARGET_CODE.get(name)
+        if target is None:
+            continue
+        mask_val = int(ng_sector_dict[name]) & ((1 << _SECTOR_MASK_BITS) - 1)
+        for k in range(_SECTOR_MASK_BITS):
+            if k in _SECTOR_SKIP_MASK_BITS:
+                continue
+            if (mask_val >> k) & 1:
+                out_list = [target if x == k else x for x in out_list]
+    return out_list

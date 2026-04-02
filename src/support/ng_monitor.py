@@ -4,6 +4,11 @@ NG 数量与良率监控工具
 根据 ng_monitor 配置和 strip 统计，判断是否告警，返回报警码。
 """
 
+import time
+from typing import Callable, Optional
+
+import modbus_tk.defines as cst
+
 
 def check_ng_alarm(stats_info: dict, ng_monitor: dict) -> int:
     """
@@ -51,3 +56,21 @@ def check_ng_alarm(stats_info: dict, ng_monitor: dict) -> int:
             return 998
 
     return 0
+
+
+def wait_for_strip_plc_choice(mm, modbus_alias: str, should_stop: Callable[[], bool], sleep_s: float = 0.05) -> Optional[str]:
+    """轮询离散输入 7=继续、8=重拍（0 基）；双 1 时 print；should_stop 时返回 None。"""
+    while not should_stop():
+        ok, data = mm.read(modbus_alias, address=7, count=2, function_code=cst.READ_DISCRETE_INPUTS)
+        if ok and data and len(data) >= 2:
+            di7, di8 = data[0], data[1]
+            print(f"{modbus_alias} di7={di7} di8={di8}")
+            if di7 and di8:
+                print(f"异常: 离散输入7与8同时为1 ({modbus_alias})")
+            elif di7:
+                return "continue"
+            elif di8:
+                return "retake"
+        
+        time.sleep(sleep_s)
+    return None

@@ -1879,7 +1879,7 @@ class Ui_MainWindow(object):
         self.actionDebug.setObjectName("actionDebug")
 
         self.retranslateUi(MainWindow)
-        self.tabWidget.setCurrentIndex(4)
+        self.tabWidget.setCurrentIndex(0)
         QtCore.QMetaObject.connectSlotsByName(MainWindow)
 
     def retranslateUi(self, MainWindow):
@@ -1931,7 +1931,7 @@ class Ui_MainWindow(object):
         self.pushButton_product_prams_save.setText(_translate("MainWindow", "保存"))
         self.pushButton_product_prams_load.setText(_translate("MainWindow", "载入配方"))
         self.groupBox_process_summary.setTitle(_translate("MainWindow", "统计信息"))
-        self.label_statistics_lot_id.setText(_translate("MainWindow", "lot_id: -"))
+        self.label_statistics_lot_id.setText(_translate("MainWindow", "Lot_ID: -"))
         self.pushButton_start.setText(_translate("MainWindow", "开始"))
         self.pushButton_stop.setText(_translate("MainWindow", "停止"))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.Home), _translate("MainWindow", "主界面"))
@@ -2045,3 +2045,4 @@ class Ui_MainWindow(object):
         self.actionDebug.setText(_translate("MainWindow", "Debug"))
 from ui.tabwidget import TabWidget
 from widgets.zoomable_graphics_view import ZoomableGraphicsView
+

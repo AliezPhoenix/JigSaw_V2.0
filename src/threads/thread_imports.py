@@ -47,6 +47,7 @@ from src.support.support_funs import (
     sanitize_filename_part,
     ensure_gray_u8,
     ensure_bgr_u8,
+    map_product_type_to_sector,
 )
-from src.support.ng_monitor import check_ng_alarm
+from src.support.ng_monitor import check_ng_alarm, wait_for_strip_plc_choice
 import typing

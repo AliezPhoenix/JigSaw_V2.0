@@ -379,7 +379,7 @@
        <enum>QTabWidget::West</enum>
       </property>
       <property name="currentIndex">
-       <number>4</number>
+       <number>0</number>
       </property>
       <property name="tabsClosable">
        <bool>false</bool>
@@ -1409,7 +1409,7 @@
                    </font>
                   </property>
                   <property name="text">
-                   <string>lot_id: -</string>
+                   <string>Lot_ID: -</string>
                   </property>
                   <property name="alignment">
                    <set>Qt::AlignCenter</set>

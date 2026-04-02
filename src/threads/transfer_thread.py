@@ -5,6 +5,7 @@ class TransferThread(QThread):
     _update_image_signal = pyqtSignal(np.ndarray, object)  # (图像, Bga_Strip|None)
     _update_statistics_signal = pyqtSignal(dict)  # 统计更新信号
     _update_message_signal = pyqtSignal(str)
+    _strip_choice_prompt_signal = pyqtSignal(str)
 
     #———————————————————————————————初始化————————————————————————————————————————————————————————————————
     def __init__(self,params:dict,HM:Hardware_Manager,MM:ModBus_Manager,ui:'MainWindow'):
@@ -251,11 +252,32 @@ class TransferThread(QThread):
             return False
         
         return True
+
+    def _transfer_plc_allow_handshake(self) -> bool:
+        """与干燥台一致：本拍是否允许写完成线圈及 strip 完成时的日志/寄存器；需 PLC 二选一则阻塞至 continue。"""
+        if not self.alarm_sent_current:
+            return True
+        self._strip_choice_prompt_signal.emit("transfer")
+        choice = wait_for_strip_plc_choice(
+            self.MM,
+            "transfer_modbus",
+            lambda: self.isInterruptionRequested(),
+        )
+        return choice == "continue"
+
+    def _transfer_finish_strip_log_and_coil(self, mode):
+        """strip 完成：完成线圈 → 寄存器 → 日志（顺序与干燥台 _dry_finish_strip_log_and_coil 一致）。"""
+        self.MM.write(alias="transfer_modbus", address=0, value_list=[1], function_code=cst.WRITE_SINGLE_COIL)
+        log_info = self.bga_strip.get_log_info()
+        send_data = self.bga_strip.full_value.copy()
+        self._write_modbus_registers(send_data, mode, side=self.current_side)
+        self.write_log_to_file(log_info)
     
     #——————————————————————————————主循环函数————————————————————————————————————————————————————————————————————
     def run(self):
-        trigger_camera_last = 0
+        trigger_camera_last = 1
         trigger_finished_last = 0
+        trigger_count_last = 0
         self.current_side = "front"
         while not self.isInterruptionRequested():
             # 检查暂停状态
@@ -276,12 +298,13 @@ class TransferThread(QThread):
             trigger_camera, trigger_front, trigger_back, trigger_finished = discrete_input_list
             mode, trigger_count, sector_change_flag = input_register_list
 
-                        
             #——————————————————————根据正反初始化 bga_strip（对齐 JIGSAW_Rebuild Threads.py WorkThread 移栽：lot/sn 寄存器 8/18）————————————————————————————————————
-            if trigger_count == 1:
+            if trigger_count == 1 and trigger_count_last != trigger_count:
+                
                 self.workflow_start_time = datetime.now()
-                lot = hex_to_string(self.MM.read("transfer_modbus", address=8, count=10, function_code=cst.READ_INPUT_REGISTERS)[1])
-                sn = hex_to_string(self.MM.read("transfer_modbus", address=18, count=10, function_code=cst.READ_INPUT_REGISTERS)[1])
+                lot = hex_to_string(self.MM.read("transfer_modbus", address=20, count=30, function_code=cst.READ_INPUT_REGISTERS)[1])
+                sn = hex_to_string(self.MM.read("transfer_modbus", address=55, count=30, function_code=cst.READ_INPUT_REGISTERS)[1])
+                print(f"TRANSFER:lot:{lot},sn:{sn}")
                 # lot_id 变化时重置 lot 级统计与告警状态
                 if lot != self._lot_stats.get("lot_id", ""):
                     self._lot_stats = {
@@ -291,7 +314,6 @@ class TransferThread(QThread):
                         "defect_counts": {"Mark": 0, "Size": 0, "Ball_Area": 0, "Ball Count": 0, "Scratch": 0, "Shift": 0}
                     }
                     self._last_alarm_code = 0
-
                 # 与 Rebuild：仅 trigger_front XOR trigger_back 时新建对应 BGA 并更新 side；否则保持 bga_strip 与 current_side
                 if trigger_front and not trigger_back:
                     self.bga_strip = Bga_Strip(
@@ -313,10 +335,16 @@ class TransferThread(QThread):
                         params=self.params,
                     )
                     self.current_side = "back"
-
-
+                elif not trigger_front and not trigger_back:
+                    trigger_count_last = 0  ##强制触发下次再读一遍
+                #报警复位
+                self.MM.write(alias="transfer_modbus",address=1,value_list=[0],function_code=cst.WRITE_SINGLE_REGISTER)
+                alarm_code = 0
+                self._last_alarm_code = alarm_code
+            
             #——————————————————————检测触发————————————————————————————————
             if (trigger_camera and not trigger_camera_last) or (trigger_finished and not trigger_finished_last):
+                self.alarm_sent_current = False
                 #——————————————————图像采集——————————————————————————————
                 ret,msg,image = self.HM.capture_image("transfer_cam")
                 if not ret:
@@ -396,9 +424,8 @@ class TransferThread(QThread):
                             )
                             self._async_save_image(product_image, filepath_ori)
                         slot[gr][gcol] = product_info
-                        image_result[
-                            y : y + template_height, x : x + template_width
-                        ] = product_info["product_image_result"]
+                        image_result[y : y + template_height, x : x + template_width] = product_info["product_image_result"]
+                        image_result = cv.rectangle(image_result, (x, y), (x + template_width, y + template_height), (0, 255, 255), 4)
                 #——————————————————更新显示和统计信息——————————————————————————————————————————————————————
 
                 self._update_image_signal.emit(image_result, self.bga_strip)
@@ -407,53 +434,65 @@ class TransferThread(QThread):
 
                 ng_monitor = self.params.get("ng_monitor", {})
                 alarm_code = check_ng_alarm(stats_info, ng_monitor) if stats_info else 0
+                if alarm_code != self._last_alarm_code:
+                    try:
+                        ok, err = self.MM.write(
+                            alias="transfer_modbus",
+                            address=1,
+                            value_list=[alarm_code],
+                            function_code=cst.WRITE_SINGLE_REGISTER,
+                        )
+                        if ok:
+                            self._last_alarm_code = alarm_code
+                            self.alarm_sent_current = alarm_code != 0
+                        else:
+                            print(f"NG监控 Modbus 写入失败: {err}")
+                    except Exception as e:
+                        print(f"NG监控 Modbus 写入异常: {e}")
 
-                # 主界面统计：strip 进行中发射合并数据（_lot_stats + 当前 strip）
-                if stats_info:
-                    merged = self._build_lot_stats_for_emit(stats_info, is_strip_finished=False)
-                    self._update_statistics_signal.emit(merged)
-
-                # 与 JIGSAW_Rebuild WorkThread：完成沿且 front|back 有效时，先写结果寄存器+完成线圈1/2，再写日志，最后写 coil0=1（中间不插入其它 Holding）
                 strip_done_modbus = (
                     trigger_finished == 1
                     and trigger_finished_last == 0
                     and (trigger_front == 1 or trigger_back == 1)
                 )
+                allow_handshake = self._transfer_plc_allow_handshake()
                 if strip_done_modbus:
                     if stats_info:
                         self._lot_stats["total_count"] += stats_info.get("total_count", 0)
                         self._lot_stats["ng_count"] += stats_info.get("ng_count", 0)
                         for k, v in (stats_info.get("defect_counts") or {}).items():
                             self._lot_stats["defect_counts"][k] = self._lot_stats["defect_counts"].get(k, 0) + v
-                    send_data = self.bga_strip.full_value.copy()
-                    log_info = self.bga_strip.get_log_info()
-                    self._write_modbus_registers(send_data, mode, side=self.current_side)
-                    self.write_log_to_file(log_info)
 
-                # 与 Rebuild：WRITE_SINGLE_COIL 线圈0=1 紧接在上一段完成之后（对应旧项目 _init_params 等之后的位置）
-                self.MM.write(alias="transfer_modbus", address=0, value_list=[1], function_code=cst.WRITE_SINGLE_COIL)
+                    if allow_handshake:
+                        self._transfer_finish_strip_log_and_coil(mode)
 
-                # v2 扩展：在 coil0 之后再写 NG 寄存器1/3 及 UI 统计，避免打乱与 PLC 约定的时序
-                if strip_done_modbus:
                     final_alarm = check_ng_alarm(stats_info, ng_monitor) if stats_info else 0
                     if final_alarm == 0 and self._last_alarm_code != 0:
                         try:
-                            self.MM.write(alias="transfer_modbus", address=3, value_list=[0], function_code=cst.WRITE_SINGLE_REGISTER)
+                            self.MM.write(
+                                alias="transfer_modbus",
+                                address=1,
+                                value_list=[0],
+                                function_code=cst.WRITE_SINGLE_REGISTER,
+                            )
                             self._last_alarm_code = 0
                         except Exception as e:
                             print(f"NG监控 复位 Modbus 写入异常: {e}")
+
                     lot_emit = self._build_lot_stats_for_emit(None, is_strip_finished=True)
                     self._update_statistics_signal.emit(lot_emit)
 
-                if alarm_code != self._last_alarm_code:
-                    try:
-                        ok, err = self.MM.write(alias="transfer_modbus", address=1, value_list=[alarm_code], function_code=cst.WRITE_SINGLE_REGISTER)
-                        if ok:
-                            self._last_alarm_code = alarm_code
-                        else:
-                            print(f"NG监控 Modbus 写入失败: {err}")
-                    except Exception as e:
-                        print(f"NG监控 Modbus 写入异常: {e}")
+                elif allow_handshake:
+                    self.MM.write(
+                        alias="transfer_modbus",
+                        address=0,
+                        value_list=[1],
+                        function_code=cst.WRITE_SINGLE_COIL,
+                    )
+
+                if stats_info and not strip_done_modbus:
+                    merged = self._build_lot_stats_for_emit(stats_info, is_strip_finished=False)
+                    self._update_statistics_signal.emit(merged)
             elif trigger_camera ==0 and trigger_finished == 0:
                 self.MM.write(alias="transfer_modbus",address = 0,value_list=[0],function_code=cst.WRITE_SINGLE_COIL)
             else:
@@ -461,7 +500,7 @@ class TransferThread(QThread):
                 self.MM.write(alias="transfer_modbus",address = 2,value_list=[0],function_code=cst.WRITE_SINGLE_COIL)
             trigger_camera_last = trigger_camera
             trigger_finished_last = trigger_finished
-            
+            trigger_count_last = trigger_count
             #————————————————————————实时显示画面————————————————————
             if self.ui.radioButton_live_transfer.isChecked():
                 #——————————————————只有在没有处理触发信号时才更新实时显示，避免重复采集图像————————————————————————————————————
