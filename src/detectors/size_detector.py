@@ -219,9 +219,11 @@ class SizeDetector:
         # 返回 x, y, w, h 格式
         box_points = [x_min, y_min, width_pixel, height_pixel]
         
-        # 转换为实际尺寸（mm）
+        # 转换为实际尺寸（mm）：宽度可用 pixel_size_x，未设置时与 pixel_size 相同
         pixel_size = self.params.get('pixel_size', 0.001)
-        product_width_mm = width_pixel * pixel_size
+        ps_x = self.params.get('pixel_size_x')
+        width_scale = pixel_size if ps_x is None else ps_x
+        product_width_mm = width_pixel * width_scale
         product_height_mm = height_pixel * pixel_size
         
         # 判断尺寸是否合格
@@ -285,8 +287,8 @@ class SizeDetector:
         
         # 验证参数有效性
         valid_keys = {
-            'min_threshold', 'max_threshold', 'allow_tolerance_x', 
-            'allow_tolerance_y', 'roi_width', 'std_size', 'pixel_size'
+            'min_threshold', 'max_threshold', 'allow_tolerance_x',
+            'allow_tolerance_y', 'roi_width', 'std_size', 'pixel_size', 'pixel_size_x',
         }
         
         invalid_keys = []
@@ -330,7 +332,12 @@ class SizeDetector:
             val = params['pixel_size']
             if not isinstance(val, (int, float)) or val <= 0:
                 validation_errors.append(f"pixel_size 必须是正数，当前值: {val}")
-        
+
+        if 'pixel_size_x' in params and params['pixel_size_x'] is not None:
+            val = params['pixel_size_x']
+            if not isinstance(val, (int, float)) or val <= 0:
+                validation_errors.append(f"pixel_size_x 必须是正数或省略，当前值: {val}")
+
         if 'std_size' in params:
             val = params['std_size']
             if not isinstance(val, (tuple, list)) or len(val) != 2:

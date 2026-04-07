@@ -1179,6 +1179,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "roi_width": 80,
             "std_size": product_size,
             "pixel_size": pixel_size,
+            "pixel_size_x": params.get("pixel_size_x"),
         })
         mark_detector = MarkDetector()
         _allow_mark = (

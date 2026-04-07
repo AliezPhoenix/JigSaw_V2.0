@@ -639,6 +639,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                     "roi_width": 80,
                     "std_size": (product_size[0], product_size[1]),
                     "pixel_size": pixel_size,
+                    "pixel_size_x": self.local_params.get("pixel_size_x"),
                 })
             
             #————————————————————————mark参数——————————————————————
