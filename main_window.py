@@ -24,6 +24,7 @@ from src.support.support_funs import (
     Bga_Strip,
     ensure_gray_u8,
     ensure_bgr_u8,
+    assign_matches_to_grid,
 )
 from src.support.InteractiveBgaLabel import InteractiveBgaLabel
 from src.detectors.ball_detector import BallDetector
@@ -1241,46 +1242,67 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         template_detector.update_params({"template_threshold": params.get("template_threshold", 0.7), "search_roi": search_roi})
 
         detect_image = cv.blur(image, (3, 3)) if station == "transfer" else image
-        template_pos_list = template_detector.detect(template, detect_image)
-        if not template_pos_list:
+        template_matches = template_detector.detect(template, detect_image)
+        if not template_matches:
             QMessageBox.warning(self, "提示", "未检测到产品位置❌")
             return
 
         template_h, template_w = template.shape[:2]
+        grid_r = int(params.get("current_row") or 0)
+        grid_c = int(params.get("current_col") or 0)
+        if grid_r <= 0 or grid_c <= 0:
+            grid_r, grid_c = 1, 1
+        pos_grid = assign_matches_to_grid(
+            template_matches,
+            template_w,
+            template_h,
+            search_roi,
+            (img_h, img_w),
+            grid_r,
+            grid_c,
+        )
+
         image_result = ensure_bgr_u8(image, copy=True)
+        # 与 dry_thread / transfer_thread 的 _detect_product 一致（非 mark_detector 的 allow_mark）
+        allow_mark_for_execute = station != "dry"
         detect_params = {
             "mark_check_enable": params.get("mark_check_enable", True),
             "size_check_enable": params.get("size_check_enable", True),
             "ball_check_enable": params.get("ball_check_enable", True),
             "shift_check_enable": params.get("shift_check_enable", True),
             "scratch_check_enable": params.get("scratch_check_enable", True),
-            "allow_mark": params.get("allow_mark", False),
+            "allow_mark": allow_mark_for_execute,
         }
-        print(detect_params)
-        for item in template_pos_list:
-            x, y = item[0], item[1]
-            if x + template_w > img_w or y + template_h > img_h:
-                continue
-            product_image = image[y:y + template_h, x:x + template_w]
-            success, msg, product_info = execute_product_detection(
-                image=product_image,
-                detectors=detectors,
-                params=detect_params,
-                detect_type=None,
-                early_return_on_ng=False,
-                error_callback=None
-            )
-            product_info["x"], product_info["y"] = x, y
-            if not success:
-                continue
-            _, _, drawn_patch = draw_detection_results(
-                product_image.copy(),
-                product_info,
-                mark_color="green" if product_info.get("defect_type") == ["OK"] else "red"
-            )
-            if drawn_patch is not None:
-                image_result[y:y + template_h, x:x + template_w] = drawn_patch
-                image_result = cv.rectangle(image_result, (x, y), (x + template_w, y + template_h), (0, 255, 255), 4)
+        for gr in range(grid_r):
+            for gcol in range(grid_c):
+                pos = pos_grid[gr][gcol]
+                if pos is None:
+                    continue
+                x, y = pos[0], pos[1]
+                if x + template_w > img_w or y + template_h > img_h:
+                    continue
+                product_image = image[y:y + template_h, x:x + template_w]
+                success, msg, product_info = execute_product_detection(
+                    image=product_image,
+                    detectors=detectors,
+                    params=detect_params,
+                    detect_type=None,
+                    early_return_on_ng=True,
+                    error_callback=None,
+                )
+                product_info["x"], product_info["y"] = x, y
+                if not success:
+                    continue
+                _, _, drawn_patch = draw_detection_results(
+                    product_image.copy(),
+                    product_info,
+                    mark_color="green" if product_info.get("defect_type") == ["OK"] else "red",
+                )
+                if drawn_patch is not None:
+                    image_result[y:y + template_h, x:x + template_w] = drawn_patch
+                    image_result = cv.rectangle(
+                        image_result, (x, y), (x + template_w, y + template_h), (0, 255, 255), 4
+                    )
         cv.putText(image_result, f"Search ROI", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
         cv.rectangle(image_result, (search_roi[0], search_roi[1]), (search_roi[0] + search_roi[2], search_roi[1] + search_roi[3]), (255, 255, 0), 5)
         self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), image_result)

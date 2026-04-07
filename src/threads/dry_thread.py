@@ -121,10 +121,8 @@ class DryThread(QThread):
         self.scratch_detector.update_params(self.scratch_detect_params)
         self.template_detector.update_params(self.template_detect_params)
         # 模板路径变化时重新加载
-        new_path = self.params.get("golden_template_path")
-        if new_path != self._template_path:
-            self._template_path = new_path
-            self._template = cv.imread(new_path) if new_path else None
+        self._template_path = self.params.get("golden_template_path")
+        self._template = cv.imread(self._template_path) if self._template_path else None
 
     def _get_template(self):
         """获取模板图像（使用缓存，路径变化时在 update_params 中已更新）"""
@@ -272,12 +270,13 @@ class DryThread(QThread):
         return choice == "continue"
 
     def _dry_finish_strip_log_and_coil(self, mode,ng_sectors):
-        """strip 完成：写完成线圈、结果寄存器与日志。"""
-        self.MM.write(alias="dry_modbus", address=0, value_list=[1], function_code=cst.WRITE_SINGLE_COIL)
+        """strip 完成：写结果寄存器与日志然后发送完成。"""
+        
         log_info = self.bga_strip.get_log_info()
         send_data = self.bga_strip.full_value.copy()
         self._write_modbus_registers(send_data, mode, side=self.current_side,ng_sectors=ng_sectors)
         self.write_log_to_file(log_info)
+        self.MM.write(alias="dry_modbus", address=0, value_list=[1], function_code=cst.WRITE_SINGLE_COIL)
     
     #——————————————————————————————主循环函数————————————————————————————————————————————————————————————————————
     def run(self):
@@ -848,7 +847,7 @@ class DryThread(QThread):
         
         result = value_transmit(value_array, mode)
         result_list = [max(0, min(65535, int(val))) for val in result.tolist()]
-        
+        print(f"DRY:result_list: {result_list}")
         if not result_list:
             print(f"警告: {side} 数据为空，跳过写入")
             return False

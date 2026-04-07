@@ -64,7 +64,6 @@ def wait_for_strip_plc_choice(mm, modbus_alias: str, should_stop: Callable[[], b
         ok, data = mm.read(modbus_alias, address=7, count=2, function_code=cst.READ_DISCRETE_INPUTS)
         if ok and data and len(data) >= 2:
             di7, di8 = data[0], data[1]
-            print(f"{modbus_alias} di7={di7} di8={di8}")
             if di7 and di8:
                 print(f"异常: 离散输入7与8同时为1 ({modbus_alias})")
             elif di7:
