@@ -1,7 +1,9 @@
 # 从共享导入文件导入所有需要的模块
+import logging
 from src.threads.thread_imports import *
 from src.detectors.sucker_detector import SuckerDetector
 import modbus_tk.defines as cst
+from src.support.operation_log import log_operation
 def _draw_result_on_image(image, result_dict):
     """在图像上绘制检测结果（矩形和十字线）"""
     if image is None:
@@ -76,7 +78,17 @@ class SuckerThread2(QThread):
         except Exception:
             pass
 
+        _main_loop_logged = False
         while not self.isInterruptionRequested():
+            if not _main_loop_logged:
+                log_operation(
+                    "SuckerThread2",
+                    "主循环开始",
+                    level=logging.INFO,
+                    cam=self.cam_alias,
+                    pixel_size=str(self.pixel_size),
+                )
+                _main_loop_logged = True
             if self.is_paused:
                 time.sleep(0.1)
                 continue
@@ -156,6 +168,8 @@ class SuckerThread2(QThread):
                 
             trigger_last = trigger
             time.sleep(0.01)
+
+        log_operation("SuckerThread2", "主循环退出", level=logging.INFO)
 
     def set_live_display_enabled(self, enabled: bool):
         """由主线程调用，更新实时显示开关（避免工作线程直接访问 UI 导致死锁）"""

@@ -15,16 +15,24 @@ def check_ng_alarm(stats_info: dict, ng_monitor: dict) -> int:
     根据 strip 统计与 ng_monitor 配置判断告警状态。
 
     Args:
-        stats_info: 来自 Bga_Strip.get_statistics_info()，含 defect_counts、yield_rate、total_count
+        stats_info: 来自 Bga_Strip.get_statistics_info()，含 defect_counts、yield_rate、total_count、empty_count（可选）
         ng_monitor: 来自 params["ng_monitor"]，含 monitor_enabled、defect_limits、min_yield_rate、min_yield_sample_size
 
     Returns:
         0: 正常
         999: 不良数量超限
         998: 良率过低
+        996: 存在缺检占位（empty_count > 0）
     """
     if not ng_monitor or not ng_monitor.get("monitor_enabled", True):
         return 0
+
+    try:
+        empty_count = int(stats_info.get("empty_count") or 0)
+    except (TypeError, ValueError):
+        empty_count = 0
+    if empty_count > 0:
+        return 996
 
     defect_limits = ng_monitor.get("defect_limits", {})
     min_yield_rate = ng_monitor.get("min_yield_rate", 100.0)
@@ -59,8 +67,14 @@ def check_ng_alarm(stats_info: dict, ng_monitor: dict) -> int:
 
 
 def wait_for_strip_plc_choice(mm, modbus_alias: str, should_stop: Callable[[], bool], sleep_s: float = 0.05) -> Optional[str]:
-    """轮询离散输入 7=继续、8=重拍（0 基）；双 1 时 print；should_stop 时返回 None。"""
-    while not should_stop():
+    """轮询离散输入 7=继续、8=重拍（0 基）；双 1 时 print；should_stop 返回 None；约 10s 无有效选择返回 timeout。"""
+    _TIMEOUT_S = 10.0
+    deadline = time.monotonic() + _TIMEOUT_S
+    while True:
+        if should_stop():
+            return None
+        if time.monotonic() >= deadline:
+            return "timeout"
         ok, data = mm.read(modbus_alias, address=7, count=2, function_code=cst.READ_DISCRETE_INPUTS)
         if ok and data and len(data) >= 2:
             di7, di8 = data[0], data[1]
@@ -70,6 +84,5 @@ def wait_for_strip_plc_choice(mm, modbus_alias: str, should_stop: Callable[[], b
                 return "continue"
             elif di8:
                 return "retake"
-        
+
         time.sleep(sleep_s)
-    return None

@@ -1,6 +1,9 @@
 # 从共享导入文件导入所有需要的模块
+import logging
+import os
 from src.threads.thread_imports import *
 import torch
+from src.support.operation_log import log_operation
 from src.support.support_funs import (
     fulltray_load_model,
     fulltray_predict_single_image,
@@ -237,7 +240,18 @@ class FulltrayThread(QThread):
         trigger_camera = 0
         trigger_camera_last = 0
         config_changed_flag_last = 0
+        _main_loop_logged = False
         while not self.isInterruptionRequested():
+            if not _main_loop_logged:
+                log_operation(
+                    "FulltrayThread",
+                    "主循环开始",
+                    level=logging.INFO,
+                    rows=str(self.params.get("rows", "")),
+                    cols=str(self.params.get("cols", "")),
+                    model=os.path.basename(str(self.params.get("model_path", "") or "") or "未设置"),
+                )
+                _main_loop_logged = True
             if self.is_paused:
                 time.sleep(0.1)
                 continue
@@ -271,6 +285,15 @@ class FulltrayThread(QThread):
                         print("满盘检测：模型未加载，跳过检测")
                         trigger_camera_last = trigger_camera
                         continue
+
+                    log_operation(
+                        "FulltrayThread",
+                        "满盘检测触发",
+                        level=logging.INFO,
+                        rows=str(self.params.get("rows", 8)),
+                        cols=str(self.params.get("cols", 16)),
+                        model=os.path.basename(str(self.params.get("model_path", "") or "") or "未设置"),
+                    )
 
                     search_roi = self.params.get("search_roi", [])
                     search_roi = search_roi if isinstance(search_roi, list) and len(search_roi) >= 4 else None
@@ -341,3 +364,5 @@ class FulltrayThread(QThread):
                 self.gc_counter = 0
 
             time.sleep(0.01)
+
+        log_operation("FulltrayThread", "主循环退出", level=logging.INFO)

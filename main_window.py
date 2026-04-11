@@ -37,6 +37,8 @@ from ImageViewerWidget import ImageViewerWidget
 from LogViewerWidget import LogViewerWidget
 import traceback
 import torch
+import logging
+from src.support.operation_log import log_operation
 
 
 class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
@@ -257,6 +259,24 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             print(f"自动加载上次配方异常: {e}")
             traceback.print_exc()
         self.pushButton_start.setEnabled(True)
+
+    def _current_lot_id_for_log(self) -> str:
+        try:
+            dry = self.statistics_data.get("干燥台", {})
+            transfer = self.statistics_data.get("移栽台", {})
+            for x in (dry.get("lot_id"), transfer.get("lot_id")):
+                if x not in (None, "", "-"):
+                    return str(x)
+            return "未设置"
+        except Exception:
+            return "未设置"
+
+    def _current_recipe_name_for_log(self) -> str:
+        try:
+            t = self.label_13.text().strip()
+            return t if t else "未设置"
+        except Exception:
+            return "未设置"
     
     def _load_config_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "选择配置文件", "./config", "配置文件 (*.json)")
@@ -266,6 +286,12 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
 
         ret,error_message = self.config_manager.load(file_path)
         if not ret:
+            log_operation(
+                "主界面-配置",
+                "加载配置文件失败",
+                level=logging.WARNING,
+                error=str(error_message),
+            )
             QMessageBox.warning(self, "警告", f"加载配置文件失败: {error_message}❌")
             return
         self._save_last_config_path(file_path)
@@ -275,6 +301,13 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             success_list = []
             for sub_station in ["dry_thread", "transfer_thread", "sucker_thread_1", "sucker_thread_2", "fulltray_thread"]:
                 success_list.append(self.thread_manager.update_params(sub_station))
+        log_operation(
+            "主界面-配置",
+            "加载配置文件成功",
+            level=logging.INFO,
+            file=os.path.basename(file_path),
+            lot_id=self._current_lot_id_for_log(),
+        )
         QMessageBox.information(self, "提示", "配置文件加载成功✅")
         self.pushButton_start.setEnabled(True)
         
@@ -286,10 +319,23 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self._update_config_from_ui()
         ret,error_message = self.config_manager.save(file_path)
         if not ret:
+            log_operation(
+                "主界面-配置",
+                "保存配置文件失败",
+                level=logging.WARNING,
+                error=str(error_message),
+            )
             QMessageBox.warning(self, "警告", f"保存配置文件失败: {error_message}❌")
             return
         self._save_last_config_path(file_path)
         self.label_13.setText(os.path.basename(file_path))
+        log_operation(
+            "主界面-配置",
+            "保存配置文件成功",
+            level=logging.INFO,
+            file=os.path.basename(file_path),
+            lot_id=self._current_lot_id_for_log(),
+        )
         QMessageBox.information(self, "提示", "配置文件保存成功✅")
 
     def _update_config_from_ui(self):
@@ -550,6 +596,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
     # =============================================================================
 
     def _devices_connect(self, progress_callback=None):
+        log_operation("主界面-设备", "开始连接相机与 Modbus", level=logging.INFO)
         total = len(self.CAM_LIST) + len(self.MODBUS_INFO_LIST)
         step = 40 / max(1, total)  # 10% -> 50%
         idx = 0
@@ -578,12 +625,20 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             success,msg = self.modbus_manager.connect(each_modbut_alias)
             if not success:
                 print( "警告", f"连接{each_modbut_alias}失败: {msg}")
+                log_operation(
+                    "主界面-设备",
+                    "Modbus 连接失败，连接流程中止",
+                    level=logging.WARNING,
+                    modbus=each_modbut_alias,
+                    error=str(msg),
+                )
                 return
             else:
                 self.connection_status["modbus"][each_modbut_alias] = True
             idx += 1
 
         self._update_connection_status()
+        log_operation("主界面-设备", "设备连接流程结束", level=logging.INFO)
 
     def _update_connection_status(self):
         status_lable = {
@@ -759,6 +814,13 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 "name": "满盘"
             }
         }
+        log_operation(
+            "主界面",
+            "开始启动线程",
+            level=logging.INFO,
+            lot_id=self._current_lot_id_for_log(),
+            recipe=self._current_recipe_name_for_log(),
+        )
         # 若尚无 ThreadManager 则创建并连接信号；已存在则复用，避免重复创建和重复连接
         if self.thread_manager is None:
             self.thread_manager = ThreadManager(
@@ -824,12 +886,44 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 print(f"  - {failed_msg}")
         elif success_count == 0:
             print("警告: 没有可启动的线程")
+
+        detail_failed = "; ".join(failed_threads)
+        if failed_threads:
+            log_operation(
+                "主界面",
+                "线程启动结束（存在未启动项）",
+                level=logging.WARNING,
+                started_count=str(success_count),
+                failed=detail_failed,
+                lot_id=self._current_lot_id_for_log(),
+            )
+        elif success_count == 0:
+            log_operation(
+                "主界面",
+                "线程启动结束（未能启动任何线程）",
+                level=logging.WARNING,
+                lot_id=self._current_lot_id_for_log(),
+            )
+        else:
+            log_operation(
+                "主界面",
+                "线程启动结束",
+                level=logging.INFO,
+                started_count=str(success_count),
+                lot_id=self._current_lot_id_for_log(),
+            )
     
         self.pushButton_start.setEnabled(False)
         self.pushButton_stop.setEnabled(True)
     
     def stop(self):
         """停止所有线程"""
+        log_operation(
+            "主界面",
+            "停止所有线程",
+            level=logging.INFO,
+            lot_id=self._current_lot_id_for_log(),
+        )
         if self.thread_manager is None:
             return
         self.thread_manager.stop_all_threads()
@@ -1065,6 +1159,13 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self._update_config_from_ui()
         self._update_ui_from_config()
         if self.thread_manager is None:
+            log_operation(
+                "主界面-参数",
+                "确认参数跳过（线程未初始化）",
+                level=logging.WARNING,
+                scope=str(station),
+                silent=str(silent),
+            )
             return
         
         if station == "all":
@@ -1072,15 +1173,47 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             for sub_station in ["dry_thread","transfer_thread","sucker_thread_1","sucker_thread_2","fulltray_thread"]:
                 success = self.thread_manager.update_params(sub_station)
                 success_list.append(success)
-            if all(success_list) and not silent:
-                QMessageBox.information(self,"提示","参数更新成功✅")
-            elif not all(success_list):
+            if all(success_list):
+                log_operation(
+                    "主界面-参数",
+                    "参数更新成功",
+                    level=logging.INFO,
+                    scope="all",
+                    silent=str(silent),
+                    lot_id=self._current_lot_id_for_log(),
+                )
+                if not silent:
+                    QMessageBox.information(self,"提示","参数更新成功✅")
+            else:
+                log_operation(
+                    "主界面-参数",
+                    "参数更新失败",
+                    level=logging.WARNING,
+                    scope="all",
+                    lot_id=self._current_lot_id_for_log(),
+                )
                 QMessageBox.warning(self, "错误", "参数更新失败❌")
         else:
             success =self.thread_manager.update_params(station)
-            if success and not silent:
-                QMessageBox.information(self,"提示","参数更新成功✅")
-            elif not success:
+            if success:
+                log_operation(
+                    "主界面-参数",
+                    "参数更新成功",
+                    level=logging.INFO,
+                    scope=str(station),
+                    silent=str(silent),
+                    lot_id=self._current_lot_id_for_log(),
+                )
+                if not silent:
+                    QMessageBox.information(self,"提示","参数更新成功✅")
+            else:
+                log_operation(
+                    "主界面-参数",
+                    "参数更新失败",
+                    level=logging.WARNING,
+                    scope=str(station),
+                    lot_id=self._current_lot_id_for_log(),
+                )
                 QMessageBox.warning(self, "错误", "参数更新失败❌")
 
     def show_pramas_set_dialog(self,station):

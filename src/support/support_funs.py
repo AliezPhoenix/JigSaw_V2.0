@@ -814,10 +814,11 @@ class Bga_Strip():
             dict: 包含统计信息的字典
                 - station: 工位名称 ("干燥台")
                 - lot_id: Lot ID
-                - total_count: 总检测数
-                - ng_count: NG总数
+                - total_count: 总检测数（含 Empty 占位条）
+                - empty_count: 缺检/未检出占位条数（defect_type[0]=="Empty"，见 write 中 _vacant_log_entry）
+                - ng_count: NG总数（不含 Empty）
                 - yield_rate: 良率 (%)
-                - defect_counts: 各缺陷类型统计字典
+                - defect_counts: 各缺陷类型统计字典（不含 Empty；Empty 用 empty_count）
         """
         try:
             # 转换numpy对象
@@ -828,10 +829,13 @@ class Bga_Strip():
             ng_count_by_type = {"Size": 0, "Ball_Area": 0, "Ball Count": 0, "Mark": 0, "Scratch": 0, "Shift": 0}
             ng_total_count = 0
             total_count = len(accumulated_log_info)
+            empty_count = 0
             
             for product in accumulated_log_info:
                 defect_type = product.get("defect_type", ["OK"])
                 is_vacant = _is_vacant_log_entry(product)
+                if is_vacant:
+                    empty_count += 1
                 is_ng = (
                     not is_vacant
                     and isinstance(defect_type, list)
@@ -853,6 +857,7 @@ class Bga_Strip():
                 "station": "干燥台" if self.station == "dry" else "移栽台",
                 "lot_id": self.strip_lot if hasattr(self, 'strip_lot') else "",
                 "total_count": total_count,
+                "empty_count": empty_count,
                 "ng_count": ng_total_count,
                 "yield_rate": yield_rate,
                 "defect_counts": {
@@ -873,6 +878,7 @@ class Bga_Strip():
                 "station": "干燥台" if self.station == "dry" else "移栽台",
                 "lot_id": "",
                 "total_count": 0,
+                "empty_count": 0,
                 "ng_count": 0,
                 "yield_rate": 0.0,
                 "defect_counts": {

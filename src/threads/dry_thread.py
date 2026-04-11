@@ -1,7 +1,9 @@
 # 从共享导入文件导入所有需要的模块
+import logging
 from ast import Continue
 from winsound import SND_ALIAS
 from src.threads.thread_imports import *
+from src.support.operation_log import log_operation
 
 class DryThread(QThread):
     _update_image_signal = pyqtSignal(np.ndarray, object)  # (图像, Bga_Strip|None)
@@ -278,7 +280,25 @@ class DryThread(QThread):
         self._write_modbus_registers(send_data, mode, side=self.current_side,ng_sectors=ng_sectors)
         self.write_log_to_file(log_info)
         self.MM.write(alias="dry_modbus", address=0, value_list=[1], function_code=cst.WRITE_SINGLE_COIL)
+        log_operation(
+            "DryThread",
+            "strip 完成 Modbus 握手线圈",
+            level=logging.INFO,
+            modbus_alias="dry_modbus",
+            function_code="WRITE_SINGLE_COIL",
+            address=0,
+            values="[1]",
+            strip_side=self.current_side,
+        )
     
+    def _params_summary_for_log(self) -> str:
+        p = self.params or {}
+        parts = []
+        for k in ("product_count", "total_rows", "total_cols", "product_type", "template_threshold", "pixel_size"):
+            if k in p:
+                parts.append(f"{k}={p[k]}")
+        return ", ".join(parts) if parts else "—"
+
     #——————————————————————————————主循环函数————————————————————————————————————————————————————————————————————
     def run(self):
         trigger_camera_last = 1
@@ -286,7 +306,16 @@ class DryThread(QThread):
         trigger_count_last = 0
         self.current_side = "front"
         debug = False
+        _main_loop_logged = False
         while not self.isInterruptionRequested():
+            if not _main_loop_logged:
+                log_operation(
+                    "DryThread",
+                    "主循环开始",
+                    level=logging.INFO,
+                    params_summary=self._params_summary_for_log(),
+                )
+                _main_loop_logged = True
             # 检查暂停状态
             if self.is_paused:
                 time.sleep(0.1)
@@ -352,9 +381,29 @@ class DryThread(QThread):
                 self.MM.write(alias="dry_modbus", address=1, value_list=[0], function_code=cst.WRITE_SINGLE_REGISTER)
                 alarm_code = 0
                 self._last_alarm_code = alarm_code
+                log_operation(
+                    "DryThread",
+                    "干燥台 strip 单面拍照开始",
+                    level=logging.INFO,
+                    lot_id=lot or "未设置",
+                    sn=sn or "未设置",
+                    strip_side=self.current_side,
+                    params_summary=self._params_summary_for_log(),
+                )
             #——————————————————————检测触发————————————————————————————————
             if (trigger_camera and not trigger_camera_last) or (trigger_finished and not trigger_finished_last):
                 self.alarm_sent_current = False
+                _shot_src = "camera" if (trigger_camera and not trigger_camera_last) else "finished_edge"
+                shot_centers = []
+                log_operation(
+                    "DryThread",
+                    "单次拍照触发",
+                    level=logging.INFO,
+                    trigger_source=_shot_src,
+                    strip_side=self.current_side,
+                    lot_id=getattr(self.bga_strip, "strip_lot", "") or "未设置",
+                    sn=getattr(self.bga_strip, "strip_sn", "") or "未设置",
+                )
                 #——————————————————图像采集——————————————————————————————
                 ret,msg,image = self.HM.capture_image("dry_cam")
                 if not ret or debug:
@@ -432,6 +481,7 @@ class DryThread(QThread):
                             self._async_save_image(product_info["product_image_result"], filepath_result)
                             self._async_save_image(product_image, filepath_ori)
                         slot[gr][gcol] = product_info
+                        shot_centers.append((x + template_width // 2, y + template_height // 2))
                         image_result[y : y + template_height, x : x + template_width] = product_info["product_image_result"]
                         image_result = cv.rectangle(image_result, (x, y), (x + template_width, y + template_height), (0, 255, 255), 4)
                 #——————————————————更新显示和统计信息——————————————————————————————————————————————————————
@@ -439,6 +489,18 @@ class DryThread(QThread):
                 self._update_image_signal.emit(image_result, self.bga_strip)
                 self.bga_strip.write(slot, image)
                 stats_info = self.bga_strip.get_statistics_info()
+                dc = (stats_info or {}).get("defect_counts") or {}
+                ng_s = ",".join(f"{k}:{v}" for k, v in sorted(dc.items()) if v) or "无"
+                ctr_s = ";".join(f"({cx},{cy})" for cx, cy in shot_centers) or "—"
+                log_operation(
+                    "DryThread",
+                    "单次拍照结束",
+                    level=logging.INFO,
+                    template_match_centers=ctr_s,
+                    product_count=str((stats_info or {}).get("total_count", 0)),
+                    ng_types=ng_s,
+                    strip_side=self.current_side,
+                )
 
 
                 #———————————————————警告相关流程————————————————————————————————————————————————————————————————————
@@ -528,6 +590,8 @@ class DryThread(QThread):
             if self.gc_counter >= self.gc_interval:
                 gc.collect()
                 self.gc_counter = 0
+
+        log_operation("DryThread", "主循环退出", level=logging.INFO)
     
     def _build_lot_stats_for_emit(self, strip_stats: dict, is_strip_finished: bool) -> dict:
         """构建主界面所需的 lot 级统计（与 get_statistics_info 格式一致）"""
@@ -872,4 +936,15 @@ class DryThread(QThread):
         if not ok_c:
             print(f"错误: {side} 写入完成线圈失败: {err_c}")
             return False
+        log_operation(
+            "DryThread",
+            "strip 完成 Modbus 结果寄存器与完成线圈",
+            level=logging.INFO,
+            modbus_alias="dry_modbus",
+            strip_side=side,
+            register_address=register_start,
+            register_values=str(result_list),
+            done_coil_address=coil_address,
+            done_coil_values="[1]",
+        )
         return True

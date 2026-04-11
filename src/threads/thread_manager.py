@@ -1,4 +1,7 @@
+import logging
+
 from PyQt5.QtCore import QThread
+from src.support.operation_log import log_operation
 from src.threads.dry_thread import DryThread
 from src.threads.transfer_thread import TransferThread
 from src.threads.suckerthread_1 import SuckerThread1
@@ -86,18 +89,34 @@ class ThreadManager:
 
     def start_all_threads(self):
         """启动所有线程"""
+        started: list[str] = []
         for alias, thread_instance in self.threads.items():
             if not thread_instance.isRunning():
                 thread_instance.start()
+                started.append(alias)
                 print(f"启动线程: {alias}")
+        log_operation(
+            "ThreadManager",
+            "批量启动线程",
+            level=logging.INFO,
+            aliases=",".join(started) if started else "无",
+        )
 
     def stop_all_threads(self):
         """停止所有线程"""
+        stopped: list[str] = []
         for alias, thread_instance in self.threads.items():
             if thread_instance.isRunning():
                 thread_instance.requestInterruption()
                 thread_instance.wait()
+                stopped.append(alias)
                 print(f"停止线程: {alias}")
+        log_operation(
+            "ThreadManager",
+            "批量停止线程",
+            level=logging.INFO,
+            aliases=",".join(stopped) if stopped else "无",
+        )
 
     def get_thread_obj(self, station):
         """
