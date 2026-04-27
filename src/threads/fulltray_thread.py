@@ -350,8 +350,8 @@ class FulltrayThread(QThread):
                 else:
                     time.sleep(0.01)
 
-            if config_changed_flag == 1 and config_changed_flag_last == 0:
-                config_name = self.MM.read(alias="fulltray_modbus", address=7, count=10, function_code=cst.READ_HOLDING_REGISTERS)
+            if config_changed_flag == 100 and config_changed_flag_last == 0:
+                config_name = self.MM.read(alias="fulltray_modbus", address=4, count=20, function_code=cst.READ_INPUT_REGISTERS)
                 config_name = hex_to_string(config_name)
                 self._update_config_changed_signal.emit(config_name)
 

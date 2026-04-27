@@ -274,6 +274,7 @@ class TransferThread(QThread):
         send_data = self.bga_strip.full_value.copy()
         self._write_modbus_registers(send_data, mode, side=self.current_side)
         self.write_log_to_file(log_info)
+        time.sleep(0.05)
         self.MM.write(alias="transfer_modbus", address=0, value_list=[1], function_code=cst.WRITE_SINGLE_COIL)
         log_operation(
             "TransferThread",
