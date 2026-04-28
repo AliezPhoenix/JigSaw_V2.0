@@ -279,6 +279,7 @@ class DryThread(QThread):
         send_data = self.bga_strip.full_value.copy()
         self._write_modbus_registers(send_data, mode, side=self.current_side,ng_sectors=ng_sectors)
         self.write_log_to_file(log_info)
+        time.sleep(0.05)
         self.MM.write(alias="dry_modbus", address=0, value_list=[1], function_code=cst.WRITE_SINGLE_COIL)
         log_operation(
             "DryThread",
@@ -633,6 +634,7 @@ class DryThread(QThread):
             "shift_check_enable": self.params.get("shift_check_enable", True),
             "scratch_check_enable": self.params.get("scratch_check_enable", True),
             "allow_mark": False,
+            "roi_block": self.params.get("roi_block", []),
             },
             detect_type=None,  # 执行所有启用的检测
             early_return_on_ng=True,  # 生产模式：检测到NG立即返回

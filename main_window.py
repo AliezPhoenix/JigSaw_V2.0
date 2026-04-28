@@ -1406,6 +1406,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "shift_check_enable": params.get("shift_check_enable", True),
             "scratch_check_enable": params.get("scratch_check_enable", True),
             "allow_mark": allow_mark_for_execute,
+            "roi_block": params.get("roi_block", []),
         }
         for gr in range(grid_r):
             for gcol in range(grid_c):

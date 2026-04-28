@@ -563,6 +563,7 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
                 "shift_check_enable": self.local_params.get("shift_check_enable", True),
                 "scratch_check_enable": self.local_params.get("scratch_check_enable", True),
                 "allow_mark": self.local_params.get("allow_mark", True),
+                "roi_block": self.local_params.get("roi_block", []),
             }
 
             # detect_type 为 None 或 "all" 时使用 local_params 的开关；为 ball/size/mark/scratch/shift 时仅执行该检测

@@ -627,6 +627,7 @@ class TransferThread(QThread):
             "ball_check_enable": self.params.get("ball_check_enable", True),
             "shift_check_enable": self.params.get("shift_check_enable", True),
             "scratch_check_enable": self.params.get("scratch_check_enable", True),
+            "roi_block": self.params.get("roi_block", []),
         }
         
         # 调用通用检测函数（提前返回模式）

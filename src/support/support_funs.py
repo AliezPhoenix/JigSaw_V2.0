@@ -1361,6 +1361,7 @@ def execute_product_detection(
             - "ball_check_enable": bool 是否启用锡球检测
             - "shift_check_enable": bool 是否启用偏移检测
             - "scratch_check_enable": bool 是否启用划痕检测
+            - "roi_block"/"roi_blocks"/"roi-block": list 屏蔽区域列表，每项为 (x, y, w, h)
         detect_type: 检测类型，可选值：
             - None 或 "all": 执行所有启用的检测
             - "mark": 仅执行Mark检测
@@ -1408,6 +1409,25 @@ def execute_product_detection(
         "shift_result": None,
         "scratch_result": None,
     }
+
+    # 解析屏蔽区域参数，兼容不同键名与单区域格式
+    raw_roi_blocks = (
+        params.get("roi_block")if params.get("roi_block") is not None
+        else (params.get("roi_blocks")if params.get("roi_blocks") is not None else params.get("roi-block"))
+    )
+    roi_blocks = []
+    if isinstance(raw_roi_blocks, (list, tuple)):
+        if len(raw_roi_blocks) >= 4 and not isinstance(raw_roi_blocks[0], (list, tuple, np.ndarray)):
+            roi_blocks = [raw_roi_blocks]
+        else:
+            roi_blocks = list(raw_roi_blocks)
+
+    # 对图像类检测统一使用屏蔽后的图像；无屏蔽时保留原逻辑
+    if roi_blocks:
+        image_for_detection = ensure_gray_u8(image, copy=True)
+        image_for_detection = mask_roi_regions(image_for_detection, roi_blocks)
+    else:
+        image_for_detection = image
     
     # Mark检测
     if mark_check_enable:
@@ -1418,7 +1438,7 @@ def execute_product_detection(
                 error_callback(error_msg)
             return False, error_msg, product_info
         
-        mark_detect_result = mark_detector.detect(image)
+        mark_detect_result = mark_detector.detect(image_for_detection)
         if not mark_detect_result[0]:  # 检测失败
             error_msg = f"Mark检测失败: {mark_detect_result[1]}"
             if error_callback:
@@ -1468,7 +1488,7 @@ def execute_product_detection(
                 error_callback(error_msg)
             return False, error_msg, product_info
         
-        size_detect_result = size_detector.detect(image)
+        size_detect_result = size_detector.detect(image_for_detection)
         if not size_detect_result[0]:  # 检测失败
             error_msg = f"Size检测失败: {size_detect_result[1]}"
             if error_callback:
@@ -1496,7 +1516,7 @@ def execute_product_detection(
                 error_callback(error_msg)
             return False, error_msg, product_info
         
-        ball_detect_result = ball_detector.detect(image)
+        ball_detect_result = ball_detector.detect(image_for_detection)
         if not ball_detect_result[0]:  # 检测失败
             error_msg = f"Ball检测失败: {ball_detect_result[1]}"
             if error_callback:
@@ -1563,7 +1583,7 @@ def execute_product_detection(
                 error_callback(error_msg)
             return False, error_msg, product_info
         
-        scratch_detect_result = scratch_detector.detect(image)
+        scratch_detect_result = scratch_detector.detect(image_for_detection)
         if not scratch_detect_result[0]:  # 检测失败
             error_msg = f"Scratch检测失败: {scratch_detect_result[1]}"
             if error_callback:
