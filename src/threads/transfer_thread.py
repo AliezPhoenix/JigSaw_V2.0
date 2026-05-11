@@ -484,15 +484,7 @@ class TransferThread(QThread):
                 dc = (stats_info or {}).get("defect_counts") or {}
                 ng_s = ",".join(f"{k}:{v}" for k, v in sorted(dc.items()) if v) or "无"
                 ctr_s = ";".join(f"({cx},{cy})" for cx, cy in shot_centers) or "—"
-                log_operation(
-                    "TransferThread",
-                    "单次拍照结束",
-                    level=logging.INFO,
-                    template_match_centers=ctr_s,
-                    product_count=str((stats_info or {}).get("total_count", 0)),
-                    ng_types=ng_s,
-                    strip_side=self.current_side,
-                )
+
 
                 ng_monitor = self.params.get("ng_monitor", {})
                 alarm_code = check_ng_alarm(stats_info, ng_monitor) if stats_info else 0
@@ -546,6 +538,7 @@ class TransferThread(QThread):
                     self._update_statistics_signal.emit(lot_emit)
 
                 elif allow_handshake:
+                    time.sleep(0.05)#通讯延迟时间
                     self.MM.write(
                         alias="transfer_modbus",
                         address=0,
@@ -553,6 +546,16 @@ class TransferThread(QThread):
                         function_code=cst.WRITE_SINGLE_COIL,
                     )
 
+                log_operation(
+                    "TransferThread",
+                    "单次拍照结束",
+                    level=logging.INFO,
+                    template_match_centers=ctr_s,
+                    product_count=str((stats_info or {}).get("total_count", 0)),
+                    ng_types=ng_s,
+                    strip_side=self.current_side,
+                    allow_handshake = allow_handshake,
+                )
                 if stats_info and not strip_done_modbus:
                     merged = self._build_lot_stats_for_emit(stats_info, is_strip_finished=False)
                     self._update_statistics_signal.emit(merged)

@@ -1071,6 +1071,7 @@ def selectROI(window_name, image, showCrosshair=True, fromCenter=False,
     
     # 显示图像并等待用户操作
     while True:
+        cv.namedWindow(window_name,cv.WINDOW_NORMAL)
         cv.imshow(window_name, display_image)
         key = cv.waitKey(1) & 0xFF
         
@@ -1093,6 +1094,7 @@ def selectROI(window_name, image, showCrosshair=True, fromCenter=False,
         elif key == 27:  # ESC键
             cv.destroyWindow(window_name)
             return (0, 0, 0, 0)
+
 
 
 def draw_detection_results(image_result: np.ndarray, product_info: dict, 

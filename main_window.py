@@ -241,7 +241,6 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         if path:
             settings = QSettings("JigSaw", "JigSaw_v2")
             settings.setValue("last_config_path", path)
-    
     def _load_last_config(self):
         """静默加载上次配方，若路径存在且文件有效则加载"""
         last_path = self._get_last_config_path()
@@ -473,6 +472,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
 
     def _update_config_from_signal(self, config_name):
         """从信号更新配置"""
+        print(config_path)
         config_path = os.path.join("./config", config_name + ".json")
         ret,error_message = self.config_manager.load(config_path)
         if not ret:
@@ -518,8 +518,8 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.PushButton_test_tempalte.clicked.connect(lambda:self.show_pramas_set_dialog("dry"))
         self.PushButton_transfer_test_template.clicked.connect(lambda:self.show_pramas_set_dialog("transfer"))
 
-        self.btn_create_new_template.clicked.connect(lambda: self.create_new_tmepalte("dry"))
-        self.btn_create_new_template_transfer.clicked.connect(lambda: self.create_new_tmepalte("transfer"))
+        self.btn_create_new_template.clicked.connect(lambda: self.create_new_template("dry"))
+        self.btn_create_new_template_transfer.clicked.connect(lambda: self.create_new_template("transfer"))
         self.pushButton_tempaltematch.clicked.connect(lambda: self.template_validity_test("dry"))
         self.pushButton_transfer_template_match.clicked.connect(lambda: self.template_validity_test("transfer"))
         self.pushButton_current_image_select_dry.clicked.connect(lambda: self.load_current_image("dry"))
@@ -1246,7 +1246,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self._update_label_from_image(getattr(self,f"label_template_display_{station}"),template)
         QMessageBox.information(self,"提示","模板已成功加载✅")
 
-    def create_new_tmepalte(self,station):
+    def create_new_template(self,station):
         image = self.current_image.get(station)
         if image is None:
             QMessageBox.warning(self, "错误", "请先选择当前图像❌")
