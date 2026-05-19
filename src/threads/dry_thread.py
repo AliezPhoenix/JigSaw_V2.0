@@ -262,6 +262,8 @@ class DryThread(QThread):
 
     def _dry_plc_allow_handshake(self) -> bool:
         """本拍是否允许写完成线圈（及 strip 完成时的日志）。需 PLC 二选一时阻塞至 continue，否则为 False。"""
+        print(f"DRY:alarm_sent_current: {self.alarm_sent_current}")
+
         if not self.alarm_sent_current:
             return True
         self._strip_choice_prompt_signal.emit("dry")
@@ -270,6 +272,10 @@ class DryThread(QThread):
             "dry_modbus",
             lambda: self.isInterruptionRequested(),
         )
+        if choice == "timeout":
+            self._strip_choice_prompt_signal.emit("timeout")
+            return False
+        
         return choice == "continue"
 
     def _dry_finish_strip_log_and_coil(self, mode,ng_sectors):
@@ -508,7 +514,7 @@ class DryThread(QThread):
                 ng_monitor = self.params.get("ng_monitor", {})
                 alarm_code = check_ng_alarm(stats_info, ng_monitor) if stats_info else 0
 
-                if alarm_code != self._last_alarm_code:
+                if alarm_code != self._last_alarm_code and self.alarm_sent_current == False:
                     try:
                         ok, err = self.MM.write(alias="dry_modbus", address=1, value_list=[alarm_code], function_code=cst.WRITE_SINGLE_REGISTER)
                         if ok:

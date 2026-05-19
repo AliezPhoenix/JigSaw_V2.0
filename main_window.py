@@ -1085,19 +1085,34 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
 
     def _on_strip_choice_prompt(self, station: str):
         """strip 结束存在 NG 时提示操作员在分选机选择（非模态，避免阻塞 UI）。"""
-        title = "提示（干燥台）" if station == "dry" else "提示（转移台）"
-        box = QMessageBox(self)
-        box.setWindowTitle(title)
-        box.setText("请在分选机页面上选择处理方案")
-        box.setIcon(QMessageBox.NoIcon)
-        box.setStandardButtons(QMessageBox.Yes)
-        box.setModal(False)
-        box.setMinimumSize(520, 200)
-        box.setStyleSheet(
-            "QMessageBox { background-color: #FF9800; }"
-            "QMessageBox QLabel { color: #212121; font-size: 20px; font-weight: bold; padding: 28px; min-width: 440px; }"
-        )
-        box.show()
+        if station == "timeout":
+            title = "提示（超时）"
+            box = QMessageBox(self)
+            box.setWindowTitle(title)
+            box.setText("提示超时，请在分选机页面上点击重新拍照")
+            box.setIcon(QMessageBox.NoIcon)
+            box.setStandardButtons(QMessageBox.Yes)
+            box.setModal(False)
+            box.setMinimumSize(600, 100)
+            box.setStyleSheet(
+                "QMessageBox { background-color: #FF9800; }"
+                "QMessageBox QLabel { color: red; font-size: 20px; font-weight: bold; padding: 28px; min-width: 400px; }"
+            )
+            box.show()
+        else:
+            title = "提示（干燥台）" if station == "dry" else "提示（转移台）"
+            box = QMessageBox(self)
+            box.setWindowTitle(title)
+            box.setText("请在分选机页面上选择处理方案")
+            box.setIcon(QMessageBox.NoIcon)
+            box.setStandardButtons(QMessageBox.Yes)
+            box.setModal(False)
+            box.setMinimumSize(520, 200)
+            box.setStyleSheet(
+                "QMessageBox { background-color: #FF9800; }"
+                "QMessageBox QLabel { color: #212121; font-size: 20px; font-weight: bold; padding: 28px; min-width: 440px; }"
+            )
+            box.show()
 
     # =============================================================================
     # 7. BGA 显示

@@ -68,7 +68,7 @@ def check_ng_alarm(stats_info: dict, ng_monitor: dict) -> int:
 
 def wait_for_strip_plc_choice(mm, modbus_alias: str, should_stop: Callable[[], bool], sleep_s: float = 0.05) -> Optional[str]:
     """轮询离散输入 7=继续、8=重拍（0 基）；双 1 时 print；should_stop 返回 None；约 10s 无有效选择返回 timeout。"""
-    _TIMEOUT_S = 10.0
+    _TIMEOUT_S = 20.0
     deadline = time.monotonic() + _TIMEOUT_S
     while True:
         if should_stop():

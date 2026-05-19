@@ -147,11 +147,11 @@ class SizeDetector:
         h, w = image_gray.shape
         
         # 直方图均衡化
-        image_gray = cv.equalizeHist(image_gray)
+        #image_gray = cv.equalizeHist(image_gray)
         
         # 二值化
         image_binary = cv.inRange(image_gray, self.params['min_threshold'], self.params['max_threshold'])
-        image_binary = cv.bitwise_not(image_binary)
+        #image_binary = cv.bitwise_not(image_binary)
         
         # 默认参数：差分步长0.7，平滑窗口5
         gradient_dx = 0.7

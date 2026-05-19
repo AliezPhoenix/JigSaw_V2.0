@@ -569,9 +569,9 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             if detect_type == "all":
                 image_binary = cv.inRange(template_gray,self.local_params["min_threshold_mark"],self.local_params["max_threshold_mark"])
             elif detect_type == "size":
-                image_gray = cv.equalizeHist(template_gray)
-                image_binary = cv.inRange(image_gray, self.local_params["min_threshold_size"], self.local_params["max_threshold_size"])
-                image_binary = cv.bitwise_not(image_binary)
+                #image_gray = cv.equalizeHist(template_gray)
+                image_binary = cv.inRange(template_gray, self.local_params["min_threshold_size"], self.local_params["max_threshold_size"])
+                #image_binary = cv.bitwise_not(image_binary)
             elif detect_type == "ball":
                 image_binary = cv.inRange(template_gray,self.local_params["min_threshold_ball"],self.local_params["max_threshold_ball"])
             elif detect_type == "mark":

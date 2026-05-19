@@ -117,74 +117,6 @@ def calculate_projection_curve(roi_image, direction='horizontal'):
     else:  # vertical
         return [np.sum(roi_image[:, w_idx]) / roi_image.shape[0] for w_idx in range(roi_image.shape[1])]
 
-def detect_peak_subpixel(curve, need_reverse=False, smooth_window=5):
-    """
-    在一维曲线中查找主峰位置（亚像素）
-    适用于频域增强后的边界响应曲线。
-    """
-    if len(curve) == 0:
-        return None
-
-    curve_arr = np.asarray(curve, dtype=np.float32)
-    if need_reverse:
-        curve_arr = curve_arr[::-1]
-
-    if smooth_window > 1:
-        if smooth_window % 2 == 0:
-            smooth_window += 1
-        kernel = np.ones(smooth_window, dtype=np.float32) / smooth_window
-        curve_arr = np.convolve(curve_arr, kernel, mode='same')
-
-    peak_idx = int(np.argmax(curve_arr))
-    offset = calculate_subpixel_offset(curve_arr, peak_idx, method='parabola')
-    if abs(offset) > 0.8:
-        offset = calculate_subpixel_offset(curve_arr, peak_idx, method='linear')
-
-    boundary_pos = float(peak_idx + offset)
-    if need_reverse:
-        boundary_pos = len(curve) - 1 - boundary_pos
-    return boundary_pos
-
-def build_frequency_edge_maps(image_float, low_cut_ratio=0.03):
-    """
-    通过频域方向滤波生成边界响应图：
-    - horizontal_edge_map: 强调水平边界（top/bottom）
-    - vertical_edge_map: 强调垂直边界（left/right）
-    """
-    h, w = image_float.shape
-    dft = cv.dft(image_float, flags=cv.DFT_COMPLEX_OUTPUT)
-    dft_shift = np.fft.fftshift(dft, axes=[0, 1])
-
-    yy, xx = np.ogrid[:h, :w]
-    cy, cx = h // 2, w // 2
-    u = xx - cx
-    v = yy - cy
-    radius = np.sqrt(u * u + v * v)
-    low_cut = max(2.0, min(h, w) * float(low_cut_ratio))
-
-    high_pass = (radius >= low_cut).astype(np.float32)
-    vertical_selector = (np.abs(u) >= np.abs(v)).astype(np.float32)
-    horizontal_selector = (np.abs(v) >= np.abs(u)).astype(np.float32)
-
-    def reconstruct(mask_2d):
-        mask_2d = (high_pass * mask_2d).astype(np.float32)
-        mask = np.repeat(mask_2d[:, :, np.newaxis], 2, axis=2)
-        filtered_shift = dft_shift * mask
-        filtered = np.fft.ifftshift(filtered_shift, axes=[0, 1])
-        spatial = cv.idft(filtered, flags=cv.DFT_SCALE | cv.DFT_REAL_OUTPUT)
-        spatial = np.abs(spatial)
-        spatial = cv.GaussianBlur(spatial, (5, 5), 0)
-        return cv.normalize(spatial, None, 0, 255, cv.NORM_MINMAX).astype(np.uint8)
-
-    vertical_edge_map = reconstruct(vertical_selector)
-    horizontal_edge_map = reconstruct(horizontal_selector)
-
-    dft_mag = cv.magnitude(dft_shift[:, :, 0], dft_shift[:, :, 1])
-    dft_mag = np.log1p(dft_mag)
-    dft_mag = cv.normalize(dft_mag, None, 0, 255, cv.NORM_MINMAX).astype(np.uint8)
-
-    return horizontal_edge_map, vertical_edge_map, dft_mag
-
 # ==================== SizeDetector 类 ====================
 
 class SizeDetector:
@@ -226,16 +158,11 @@ class SizeDetector:
         image_gray = ensure_gray_u8(image, copy=True)
         self.image = image_gray
         h, w = image_gray.shape
-        # 频域方向滤波提取边界响应
-        image_float = image_gray.astype(np.float32)
-        horizontal_edge_map, vertical_edge_map, dft_mag = build_frequency_edge_maps(image_float)
-        image_binary = cv.max(horizontal_edge_map, vertical_edge_map)
 
-        cv.namedWindow("image_dft",cv.WINDOW_NORMAL)
-        cv.namedWindow("image_binary_debug",cv.WINDOW_NORMAL)
-        cv.imshow("image_binary_debug",image_binary)
-        cv.imshow("image_dft", dft_mag)
-        
+        # 二值化
+        image_binary = cv.inRange(image_gray, self.params['min_threshold'], self.params['max_threshold'])
+        #image_binary = cv.bitwise_not(image_binary)
+
         # 默认参数：差分步长0.7，平滑窗口5
         gradient_dx = 0.7
         smooth_window = 5
@@ -256,18 +183,21 @@ class SizeDetector:
         # 对每个ROI进行边界检测
         boundaries = {}
         for roi_name, (roi_x, roi_y, roi_w, roi_h) in rois.items():
+            roi_image = image_binary[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w].copy()
             is_horizontal = roi_name in ['top', 'bottom']
             is_reverse = roi_name in ['top', 'left']
-            source_map = horizontal_edge_map if is_horizontal else vertical_edge_map
-            roi_image = source_map[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w].copy()
             
             # 计算投影曲线
             proj_curve = calculate_projection_curve(roi_image, 'horizontal' if is_horizontal else 'vertical')
-
-            # 在频域增强曲线中做主峰亚像素定位
-            boundary_offset = detect_peak_subpixel(
-                proj_curve,
+            
+            # 根据搜索方向处理投影曲线
+            proj_curve_for_detection = proj_curve[::-1] if is_reverse else proj_curve
+            
+            # 检测边界
+            boundary_offset = detect_boundary_subpixel(
+                proj_curve_for_detection,
                 need_reverse=is_reverse,
+                dx=gradient_dx,
                 smooth_window=smooth_window
             )
             
@@ -305,7 +235,7 @@ class SizeDetector:
         width_scale = pixel_size if ps_x is None else ps_x
         product_width_mm = width_pixel * width_scale
         product_height_mm = height_pixel * pixel_size
-        
+    
         # 判断尺寸是否合格
         is_valid = False
         
@@ -460,20 +390,153 @@ detect_params = {
     "min_threshold":100,
     "max_threshold":200,
     "pixel_size":0.008841,
-    "roi_width":150
+    "roi_width":150,
+    "allow_tolerance_x":0.07,
+    "allow_tolerance_y":0.07,
+    "std_size":(10.0, 15.0)
 }
 product_info = {
     "size_result":()
 }
 
 Size_D.update_params(detect_params)
-for i in os.listdir('Image\Data_Save_Dry'):
-    image_ori = cv.imread("Image\Data_Save_Dry\\"+i)
-    size_detect_result = Size_D.detect(image_ori)
-    print(size_detect_result[2])
-    print(size_detect_result[2])
-    product_info["size_result"] = size_detect_result
-    ret,msg,image_ori = support_funs.draw_detection_results(image_result= image_ori,product_info= product_info)
-    cv.namedWindow("result",cv.WINDOW_NORMAL)
-    cv.imshow("result",image_ori)
-    cv.waitKey()
+
+def _on_slider_change(_):
+    """Trackbar 回调占位函数。"""
+    return
+
+
+PANEL_NAME = "threshold_panel"
+BINARY_NAME = "binary"
+RESULT_NAME = "result"
+SLIDER_INITIALIZED = False
+
+
+def init_threshold_debug_windows():
+    global SLIDER_INITIALIZED
+    if SLIDER_INITIALIZED:
+        return
+
+    cv.namedWindow(PANEL_NAME, cv.WINDOW_NORMAL)
+    cv.resizeWindow(PANEL_NAME, 600, 120)
+    cv.namedWindow(BINARY_NAME, cv.WINDOW_NORMAL)
+    cv.namedWindow(RESULT_NAME, cv.WINDOW_NORMAL)
+
+    cv.createTrackbar("min_threshold", PANEL_NAME, 0, 255, _on_slider_change)
+    cv.createTrackbar("max_threshold", PANEL_NAME, 255, 255, _on_slider_change)
+    SLIDER_INITIALIZED = True
+
+
+def run_threshold_debug_ui(detector, image_path: str):
+    image_ori = cv.imread(image_path)
+    if image_ori is None:
+        print(f"无法读取图像: {image_path}")
+        return
+
+    init_threshold_debug_windows()
+
+    init_min = int(detector.params.get("min_threshold", 0))
+    init_max = int(detector.params.get("max_threshold", 255))
+    cv.setTrackbarPos("min_threshold", PANEL_NAME, init_min)
+    cv.setTrackbarPos("max_threshold", PANEL_NAME, init_max)
+
+    while True:
+        min_threshold = cv.getTrackbarPos("min_threshold", PANEL_NAME)
+        max_threshold = cv.getTrackbarPos("max_threshold", PANEL_NAME)
+        if min_threshold > max_threshold:
+            max_threshold = min_threshold
+            cv.setTrackbarPos("max_threshold", PANEL_NAME, max_threshold)
+
+        detector.update_params(
+            {"min_threshold": min_threshold, "max_threshold": max_threshold},
+            clear_result=False,
+        )
+
+        gray_image = ensure_gray_u8(image_ori, copy=True)
+        image_binary = cv.inRange(gray_image, min_threshold, max_threshold)
+
+        size_detect_result = detector.detect(image_ori.copy())
+        product_info["size_result"] = size_detect_result
+
+        ret, msg, result_img = support_funs.draw_detection_results(
+            image_result=image_ori.copy(),
+            product_info=product_info,
+        )
+        result_data = size_detect_result[2] if size_detect_result and len(size_detect_result) > 2 else {}
+        width_mm = float(result_data.get("width", 0.0))
+        height_mm = float(result_data.get("height", 0.0))
+        is_valid = bool(result_data.get("is_valid", False))
+        status_text = "OK" if is_valid else "NG"
+        status_color = (0, 255, 0) if is_valid else (0, 0, 255)
+
+        # 先绘制背景条，保证大字号文本在复杂背景上也清晰可见
+        cv.rectangle(result_img, (0, 0), (760, 185), (20, 20, 20), -1)
+        cv.putText(
+            result_img,
+            f"min={min_threshold}, max={max_threshold}",
+            (18, 42),
+            cv.FONT_HERSHEY_SIMPLEX,
+            1.05,
+            (0, 255, 255),
+            3,
+            cv.LINE_AA,
+        )
+        cv.putText(
+            result_img,
+            f"W={width_mm:.3f} mm, H={height_mm:.3f} mm",
+            (18, 88),
+            cv.FONT_HERSHEY_SIMPLEX,
+            1.05,
+            (255, 255, 255),
+            3,
+            cv.LINE_AA,
+        )
+        cv.putText(
+            result_img,
+            f"RESULT: {status_text}",
+            (18, 134),
+            cv.FONT_HERSHEY_SIMPLEX,
+            1.2,
+            status_color,
+            4,
+            cv.LINE_AA,
+        )
+        cv.putText(
+            result_img,
+            "ESC: quit, E: previous, Q: next",
+            (18, 175),
+            cv.FONT_HERSHEY_SIMPLEX,
+            0.95,
+            (0, 255, 255),
+            3,
+            cv.LINE_AA,
+        )
+
+        cv.imshow(BINARY_NAME, image_binary)
+        cv.imshow(RESULT_NAME, result_img)
+
+        key = cv.waitKey(30) & 0xFF
+        if key == 27:
+            return "quit"
+        if key == ord("e"):
+            return "prev"
+        if key == ord("q"):
+            return "next"
+
+
+image_paths = [
+    os.path.join("Image\\Data_Save_Dry", filename)
+    for filename in os.listdir("Image\\Data_Save_Dry")
+]
+
+idx = 0
+while 0 <= idx < len(image_paths):
+    action = run_threshold_debug_ui(Size_D, image_paths[idx])
+    if action == "quit":
+        break
+    if action == "prev":
+        idx = max(0, idx - 1)
+    else:
+        idx += 1
+
+cv.destroyAllWindows()
