@@ -1,11 +1,65 @@
 import numpy as np
+import cv2 as cv
 import time
 from PIL import Image
 from ctypes import *
 from tools.MvImport.MvCameraControl_class import *
 from tools.MvImport.CameraParams_header import MVCC_ENUMVALUE
 
-class CameraController():
+class _CameraCommon:
+
+    @staticmethod
+    def to_hex_str(num):
+        chaDic = {10: 'a', 11: 'b', 12: 'c', 13: 'd', 14: 'e', 15: 'f'}
+        hexStr = ""
+        if num < 0:
+            num = num + 2**32
+        while num >= 16:
+            digit = num % 16
+            hexStr = chaDic.get(digit, str(digit)) + hexStr
+            num //= 16
+        hexStr = chaDic.get(num, str(num)) + hexStr
+        return hexStr
+    
+    @staticmethod
+    def frame_to_opencv_image(frame_out_info, src_buf):
+        width = int(frame_out_info.stFrameInfo.nWidth)
+        height = int(frame_out_info.stFrameInfo.nHeight)
+        pixel_type = int(frame_out_info.stFrameInfo.enPixelType)
+        frame_len = int(frame_out_info.stFrameInfo.nFrameLen)
+
+        np_buffer = np.ctypeslib.as_array(src_buf, shape=(frame_len,)).copy()
+
+        if pixel_type == PixelType_Gvsp_Mono8:
+            return np_buffer.reshape(height, width)
+
+        if pixel_type == PixelType_Gvsp_RGB8_Packed:
+            rgb_img = np_buffer.reshape(height, width, 3)
+            return cv.cvtColor(rgb_img, cv.COLOR_RGB2BGR)
+
+        if pixel_type == PixelType_Gvsp_BGR8_Packed:
+            return np_buffer.reshape(height, width, 3)
+
+        if pixel_type in (
+            PixelType_Gvsp_BayerRG8,
+            PixelType_Gvsp_BayerGB8,
+            PixelType_Gvsp_BayerGR8,
+            PixelType_Gvsp_BayerBG8,
+        ):
+            bayer_img = np_buffer.reshape(height, width)
+            bayer_code_map = {
+                PixelType_Gvsp_BayerRG8: cv.COLOR_BAYER_RG2BGR,
+                PixelType_Gvsp_BayerGB8: cv.COLOR_BAYER_GB2BGR,
+                PixelType_Gvsp_BayerGR8: cv.COLOR_BAYER_GR2BGR,
+                PixelType_Gvsp_BayerBG8: cv.COLOR_BAYER_BG2BGR,
+            }
+            return cv.cvtColor(bayer_img, bayer_code_map[pixel_type])
+
+        return None
+
+
+
+class CameraController(_CameraCommon):
 
     def __init__(self,obj_cam,netIp,deviceIp,b_open_device=False,b_start_grabbing = False,h_thread_handle=None,\
                 b_thread_closed=False,st_frame_info=None,b_exit=False,b_save_bmp=False,b_save_jpg=False,buf_save_image=None,\
@@ -35,16 +89,7 @@ class CameraController():
         self._cached_frame_size = 0
 
     def To_hex_str(self,num):
-        chaDic = {10: 'a', 11: 'b', 12: 'c', 13: 'd', 14: 'e', 15: 'f'}
-        hexStr = ""
-        if num < 0:
-            num = num + 2**32
-        while num >= 16:
-            digit = num % 16
-            hexStr = chaDic.get(digit, str(digit)) + hexStr
-            num //= 16
-        hexStr = chaDic.get(num, str(num)) + hexStr   
-        return hexStr
+        return self.to_hex_str(num)
 
     def Open_device(self):
         if False == self.b_open_device:
@@ -160,60 +205,7 @@ class CameraController():
             print(f"获取 {parameter_type} 失败，ret = {ret}")
             return None
         return st_float_param.fCurValue
-        # ret = 0
-        # st_float_param = MVCC_FLOATVALUE()
-        # memset(byref(st_float_param), 0, sizeof(MVCC_FLOATVALUE))
-        # if parameter_type is None: 
-        #     return 1, "Please Enter a Parameter Type"
-        # if self.b_open_device == False:
-        #     return 1, "Please Open Device First"
-        
-        # if parameter_type == "ExposureTime":
-        #     ret = self.obj_cam.MV_CC_GetFloatValue("ExposureTime", st_float_param)
-        #     if ret != 0:
-        #         return ret,'show error','get exposure time fail! ret = '+self.To_hex_str(ret), st_float_param.fCurValue
-        #     else:
-        #         return ret, 'get exposure time success', f'ExposureTime = {st_float_param.fCurValue}'
-        # elif parameter_type == "Gain":
-        #     ret = self.obj_cam.MV_CC_GetFloatValue("Gain", st_float_param)
-        #     if ret != 0:
-        #         return ret,'show error','get gain fail! ret = '+self.To_hex_str(ret), st_float_param.fCurValue
-        #     else:
-        #         return ret, 'get gain success', f'Gain = {st_float_param.fCurValue}'
-        # elif parameter_type == "Gamma":
-        #     ret = self.obj_cam.MV_CC_GetFloatValue("Gamma", st_float_param)
-        #     if ret != 0:
-        #         return ret,'show error','get gamma fail! ret = '+self.To_hex_str(ret), st_float_param.fCurValue
-        #     else:
-        #         return ret, 'get gamma success', f'Gamma = {st_float_param.fCurValue}'
-        # elif parameter_type == "AcquisitionFrameRate":
-        #     ret = self.obj_cam.MV_CC_GetFloatValue("AcquisitionFrameRate", st_float_param)
-        #     if ret != 0:
-        #         return ret,'show error','get AcquisitionFrameRate fail! ret = '+self.To_hex_str(ret), st_float_param.fCurValue
-        #     else:
-        #         return ret, 'get AcquisitionFrameRate success', f'AcquisitionFrameRate = {st_float_param.fCurValue}'
-
-        # if True == self.b_open_device:
-        #     stFloatParam_FrameRate =  MVCC_FLOATVALUE()
-        #     memset(byref(stFloatParam_FrameRate), 0, sizeof(MVCC_FLOATVALUE))
-        #     stFloatParam_exposureTime = MVCC_FLOATVALUE()
-        #     memset(byref(stFloatParam_exposureTime), 0, sizeof(MVCC_FLOATVALUE))
-        #     stFloatParam_gain = MVCC_FLOATVALUE()
-        #     memset(byref(stFloatParam_gain), 0, sizeof(MVCC_FLOATVALUE))
-        #     ret = self.obj_cam.MV_CC_GetFloatValue("AcquisitionFrameRate", stFloatParam_FrameRate)
-        #     if ret != 0:
-        #         print('show error','get acquistion frame rate fail! ret = '+self.To_hex_str(ret))
-        #     self.frame_rate = stFloatParam_FrameRate.fCurValue
-        #     ret = self.obj_cam.MV_CC_GetFloatValue("ExposureTime", stFloatParam_exposureTime)
-        #     if ret != 0:
-        #         print('show error','get exposure time fail! ret = '+self.To_hex_str(ret))
-        #     self.exposure_time = stFloatParam_exposureTime.fCurValue
-        #     ret = self.obj_cam.MV_CC_GetFloatValue("Gain", stFloatParam_gain)
-        #     if ret != 0:
-        #         print('show error','get gain fail! ret = '+self.To_hex_str(ret))
-        #     self.gain = stFloatParam_gain.fCurValue
-        #     print('show info','get parameter success!')
-
+      
     def Set_parameter(self ,parameter_type = None,value = None):
         ret = 0
         if parameter_type is None or value is None:
@@ -493,49 +485,117 @@ class CameraController():
         if None != self.buf_save_image:
             del self.buf_save_image
 
-    def Is_mono_data(self,enGvspPixelType):
-        if PixelType_Gvsp_Mono8 == enGvspPixelType or PixelType_Gvsp_Mono10 == enGvspPixelType \
-            or PixelType_Gvsp_Mono10_Packed == enGvspPixelType or PixelType_Gvsp_Mono12 == enGvspPixelType \
-            or PixelType_Gvsp_Mono12_Packed == enGvspPixelType:
-            return True
-        else:
-            return False
 
-    def Is_color_data(self,enGvspPixelType):
-        if PixelType_Gvsp_BayerGR8 == enGvspPixelType or PixelType_Gvsp_BayerRG8 == enGvspPixelType \
-            or PixelType_Gvsp_BayerGB8 == enGvspPixelType or PixelType_Gvsp_BayerBG8 == enGvspPixelType \
-            or PixelType_Gvsp_BayerGR10 == enGvspPixelType or PixelType_Gvsp_BayerRG10 == enGvspPixelType \
-            or PixelType_Gvsp_BayerGB10 == enGvspPixelType or PixelType_Gvsp_BayerBG10 == enGvspPixelType \
-            or PixelType_Gvsp_BayerGR12 == enGvspPixelType or PixelType_Gvsp_BayerRG12 == enGvspPixelType \
-            or PixelType_Gvsp_BayerGB12 == enGvspPixelType or PixelType_Gvsp_BayerBG12 == enGvspPixelType \
-            or PixelType_Gvsp_BayerGR10_Packed == enGvspPixelType or PixelType_Gvsp_BayerRG10_Packed == enGvspPixelType \
-            or PixelType_Gvsp_BayerGB10_Packed == enGvspPixelType or PixelType_Gvsp_BayerBG10_Packed == enGvspPixelType \
-            or PixelType_Gvsp_BayerGR12_Packed == enGvspPixelType or PixelType_Gvsp_BayerRG12_Packed== enGvspPixelType \
-            or PixelType_Gvsp_BayerGB12_Packed == enGvspPixelType or PixelType_Gvsp_BayerBG12_Packed == enGvspPixelType \
-            or PixelType_Gvsp_YUV422_Packed == enGvspPixelType or PixelType_Gvsp_YUV422_YUYV_Packed == enGvspPixelType:
-            return True
-        else:
-            return False
 
-    def Mono_numpy(self,data,nWidth,nHeight):
-        data_ = np.frombuffer(data, count=int(nWidth * nHeight), dtype=np.uint8, offset=0)
-        data_mono_arr = data_.reshape(nHeight, nWidth)
-        numArray = np.zeros([nHeight, nWidth, 1],"uint8")
-        numArray[:, :, 0] = data_mono_arr
-        return numArray
+class LineScanCamera(_CameraCommon):
+    def __init__(self,obj_cam,netIp,deviceIp,device_index=0,b_open_device=False,b_start_grabbing = False,h_thread_handle=None,\
+                b_thread_closed=False,st_frame_info=None,b_exit=False,b_save_bmp=False,b_save_jpg=False,buf_save_image=None,\
+                n_save_image_size=0,n_win_gui_id=0,frame_rate=0,exposure_time=0,gain=0):
 
-    def Color_numpy(self,data,nWidth,nHeight):
-        data_ = np.frombuffer(data, count=int(nWidth*nHeight*3), dtype=np.uint8, offset=0)
-        data_r = data_[0:nWidth*nHeight*3:3]
-        data_g = data_[1:nWidth*nHeight*3:3]
-        data_b = data_[2:nWidth*nHeight*3:3]
+        self.obj_cam:MvCamera= obj_cam
+        self.b_open_device = b_open_device
+        self.device_index = device_index
+        self.netIp = netIp
+        self.deviceIp = deviceIp
+        self.b_start_grabbing = b_start_grabbing 
+        self.b_thread_closed = b_thread_closed
+        self.st_frame_info = st_frame_info
+        self.b_exit = b_exit
+        self.b_save_bmp = b_save_bmp
+        self.b_save_jpg = b_save_jpg
+        self.buf_save_image = buf_save_image
+        self.h_thread_handle = h_thread_handle
+        self.n_win_gui_id = n_win_gui_id
+        self.n_save_image_size = n_save_image_size
+        self.b_thread_closed
+        self.frame_rate = frame_rate
+        self.exposure_time = exposure_time
+        self.gain = gain
+        # 飞拍优化：缓存缓冲区，避免重复分配
+        self._buf_cache = None
+        self._img_buff = None
+        self._cached_frame_size = 0
+        MvCamera.MV_CC_Initialize()
 
-        data_r_arr = data_r.reshape(nHeight, nWidth)
-        data_g_arr = data_g.reshape(nHeight, nWidth)
-        data_b_arr = data_b.reshape(nHeight, nWidth)
-        numArray = np.zeros([nHeight, nWidth, 3],"uint8")
+    def Open_device(self):
+        if False == self.b_open_device:
+            device_list = MV_CC_DEVICE_INFO_LIST()
+            t_layer_type = (MV_GIGE_DEVICE | MV_USB_DEVICE | MV_GENTL_CAMERALINK_DEVICE
+                            | MV_GENTL_CXP_DEVICE | MV_GENTL_XOF_DEVICE)
+            ret = MvCamera.MV_CC_EnumDevices(t_layer_type, device_list)
+            if ret != 0:
+         
+                return ret,"enum devices fail! ret[0x%x]" % ret
+            if device_list.nDeviceNum == 0:
+                return ret,"find no device!"
+            self.mvcc_dev_info = cast(device_list.pDeviceInfo[self.device_index], POINTER(MV_CC_DEVICE_INFO)).contents
+            self.obj_cam = MvCamera()
+            ret = self.obj_cam.MV_CC_CreateHandle(self.mvcc_dev_info)
+            if ret != 0:
+                return ret,"create handle fail! ret[0x%x]" % ret
+            ret = self.obj_cam.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
+            if ret != 0:
+                return ret,"open device fail! ret[0x%x]" % ret
+            print("open device successfully!")
+            self.b_open_device = True
+            self.b_thread_closed = False
+            return 0,"Success"
+    def Close_device(self):
+        if False == self.b_open_device:
+            return 1,"device not open!"
+        ret = self.obj_cam.MV_CC_CloseDevice()
+        if ret != 0:
+            return ret,"close device fail! ret[0x%x]" % ret
+        self.b_open_device = False
+        self.b_thread_closed = True
+        return 0,"Success"
 
-        numArray[:, :, 0] = data_r_arr
-        numArray[:, :, 1] = data_g_arr
-        numArray[:, :, 2] = data_b_arr
-        return numArray
+    def Start_grabbing(self):
+        if False == self.b_open_device:
+            return 1,"device not open!"
+        ret = self.obj_cam.MV_CC_StartGrabbing()
+        if ret != 0:
+            return ret,"start grabbing fail! ret[0x%x]" % ret
+        self.b_start_grabbing = True
+        print("start grabbing successfully!")
+        return 0,"Success"
+
+    def Stop_grabbing(self):
+        if True == self.b_start_grabbing and self.b_open_device == True:
+            ret = self.obj_cam.MV_CC_StopGrabbing()
+            if ret != 0:
+                return ret,"stop grabbing fail! ret[0x%x]" % ret                       
+
+    def Get_image(self):
+        self.st_frame_info = MV_FRAME_OUT()
+        memset(byref(self.st_frame_info), 0, sizeof(self.st_frame_info))
+        ret =self.obj_cam.MV_CC_GetImageBuffer(self.st_frame_info, 1000)
+        if ret != 0:
+            return ret,"get image buffer fail! ret[0x%x]" % ret
+        
+        opencv_image =self.frame_to_opencv_image(self.st_frame_info, self.st_frame_info.pBufAddr)
+        self.obj_cam.MV_CC_FreeImageBuffer(self.st_frame_info)
+        return opencv_image
+
+    def Set_parameter(self,parameter_name,parameter_type,value):
+        if parameter_type == "EnumValue":
+            ret = self.obj_cam.MV_CC_SetEnumValue(parameter_name,int(value))
+            if ret != 0:
+                return ret,"set enum value fail! ret[0x%x]" % ret
+        elif parameter_type == "FloatValue":
+            ret = self.obj_cam.MV_CC_SetFloatValue(parameter_name,float(value))
+            if ret != 0:
+                return ret,"set float value fail! ret[0x%x]" % ret
+        elif parameter_type == "IntValue":
+            ret = self.obj_cam.MV_CC_SetIntValueEx(parameter_name,int(value))
+            if ret != 0:
+                return ret,"set int value fail! ret[0x%x]" % ret
+        elif parameter_type == "BoolValue":
+            ret = self.obj_cam.MV_CC_SetBoolValue(parameter_name,c_bool(value))
+            if ret != 0:
+                return ret,"set bool value fail! ret[0x%x]" % ret
+        elif parameter_type == "StringValue":
+            ret = self.obj_cam.MV_CC_SetStringValue(parameter_name,value)
+            if ret != 0:
+                return ret,"set string value fail! ret[0x%x]" % ret
+        return 0,"Success"
