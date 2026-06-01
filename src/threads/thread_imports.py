@@ -40,6 +40,7 @@ from src.detectors.scratch_detector import ScratchDetector
 from src.support.support_funs import (
     Bga_Strip,
     assign_matches_to_grid,
+    normalize_grid_search_roi,
     hex_to_string,
     value_transmit,
     draw_detection_results,

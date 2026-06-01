@@ -124,6 +124,319 @@ def ensure_bgr_u8(image: np.ndarray, *, copy: bool = True) -> np.ndarray:
     return cv.cvtColor(np.ascontiguousarray(image[:, :, 0]), cv.COLOR_GRAY2BGR)
 
 
+def normalize_rect(start_point, end_point):
+    """将拖拽端点规范化为左上角 + 宽高。"""
+    x1, y1 = start_point
+    x2, y2 = end_point
+    x = min(x1, x2)
+    y = min(y1, y2)
+    w = abs(x2 - x1)
+    h = abs(y2 - y1)
+    return x, y, w, h
+
+
+def calc_bounds(origin: int, length: int, parts: int):
+    """
+    生成整数边界序列，确保 [origin, origin + length] 被完整覆盖。
+    余数优先分配给前面的块，避免像素丢失。
+    """
+    if parts <= 0:
+        return [origin, origin + max(0, int(length))]
+    base = int(length) // int(parts)
+    rem = int(length) % int(parts)
+    bounds = [int(origin)]
+    current = int(origin)
+    for idx in range(parts):
+        step = base + (1 if idx < rem else 0)
+        current += step
+        bounds.append(current)
+    return bounds
+
+
+def split_roi_to_grid(x: int, y: int, w: int, h: int, grid_rows: int, grid_cols: int):
+    """
+    把总 ROI 按网格切分为 cell_roi 列表（原图坐标，行优先）。
+    返回: List[(x, y, w, h)]。
+    """
+    if w <= 0 or h <= 0 or grid_rows <= 0 or grid_cols <= 0:
+        return []
+    col_bounds = calc_bounds(x, w, grid_cols)
+    row_bounds = calc_bounds(y, h, grid_rows)
+    cells = []
+    for r in range(grid_rows):
+        for c in range(grid_cols):
+            cx = col_bounds[c]
+            cy = row_bounds[r]
+            cw = col_bounds[c + 1] - col_bounds[c]
+            ch = row_bounds[r + 1] - row_bounds[r]
+            if cw > 0 and ch > 0:
+                cells.append((int(cx), int(cy), int(cw), int(ch)))
+    return cells
+
+
+def build_pyramid_display(image: np.ndarray, max_display_edge: int = 2000):
+    """
+    构建用于交互显示的金字塔缩放图。
+    返回: (display_img, scale_factor)，scale_factor 为 display->source 倍率（1/2/4...）。
+    """
+    display = image.copy()
+    scale_factor = 1
+    h, w = display.shape[:2]
+    while max(h, w) > max_display_edge and min(h, w) >= 2:
+        display = cv.pyrDown(display)
+        scale_factor *= 2
+        h, w = display.shape[:2]
+    return display, scale_factor
+
+
+def display_to_source_point(px: int, py: int, src_w: int, src_h: int, scale_factor: int):
+    """将显示层坐标映射回原图坐标，并做边界裁剪。"""
+    sx = int(round(px * scale_factor))
+    sy = int(round(py * scale_factor))
+    sx = max(0, min(src_w - 1, sx))
+    sy = max(0, min(src_h - 1, sy))
+    return sx, sy
+
+
+def draw_grid_overlay(
+    canvas: np.ndarray,
+    start_point,
+    end_point,
+    grid_rows: int,
+    grid_cols: int,
+    rect_color,
+    line_thickness: int,
+    show_crosshair: bool,
+):
+    """在框选阶段绘制外框 + 网格线 + 可选十字线。"""
+    x, y, w, h = normalize_rect(start_point, end_point)
+    cv.rectangle(canvas, (x, y), (x + w, y + h), rect_color, line_thickness)
+
+    if show_crosshair:
+        center_x = x + w // 2
+        center_y = y + h // 2
+        img_h, img_w = canvas.shape[:2]
+        cv.line(canvas, (center_x, 0), (center_x, img_h), rect_color, line_thickness)
+        cv.line(canvas, (0, center_y), (img_w, center_y), rect_color, line_thickness)
+
+    if w <= 0 or h <= 0 or grid_rows <= 0 or grid_cols <= 0:
+        return
+
+    col_bounds = calc_bounds(x, w, grid_cols)
+    row_bounds = calc_bounds(y, h, grid_rows)
+    for cx in col_bounds[1:-1]:
+        cv.line(canvas, (cx, y), (cx, y + h), rect_color, 1)
+    for cy in row_bounds[1:-1]:
+        cv.line(canvas, (x, cy), (x + w, cy), rect_color, 1)
+
+
+def select_roi_grid(
+    window_name: str,
+    image: np.ndarray,
+    grid_rows: int,
+    grid_cols: int,
+    *,
+    show_crosshair: bool = True,
+    rect_color=(0, 255, 255),
+    line_thickness: int = 2,
+    max_display_edge: int = 1500,
+):
+    """
+    在原图上框选总 ROI，然后切成网格 cells（原图坐标，行优先）。
+    交互按键：空格/回车确认，ESC取消。
+    """
+    if grid_rows <= 0 or grid_cols <= 0:
+        return []
+
+    source_image = ensure_bgr_u8(image)
+    src_h, src_w = source_image.shape[:2]
+    display_image, scale_factor = build_pyramid_display(
+        source_image, max_display_edge=max_display_edge
+    )
+    dynamic_canvas = display_image.copy()
+
+    drawing = False
+    start_point = None
+    end_point = None
+
+    def mouse_callback(event, x, y, flags, param):
+        nonlocal drawing, start_point, end_point, dynamic_canvas
+        if event == cv.EVENT_LBUTTONDOWN:
+            drawing = True
+            start_point = (x, y)
+            end_point = (x, y)
+            dynamic_canvas = display_image.copy()
+        elif event == cv.EVENT_MOUSEMOVE and drawing:
+            end_point = (x, y)
+            dynamic_canvas = display_image.copy()
+            draw_grid_overlay(
+                dynamic_canvas,
+                start_point,
+                end_point,
+                grid_rows,
+                grid_cols,
+                rect_color,
+                line_thickness,
+                show_crosshair,
+            )
+        elif event == cv.EVENT_LBUTTONUP:
+            drawing = False
+            end_point = (x, y)
+            dynamic_canvas = display_image.copy()
+            draw_grid_overlay(
+                dynamic_canvas,
+                start_point,
+                end_point,
+                grid_rows,
+                grid_cols,
+                rect_color,
+                line_thickness,
+                show_crosshair,
+            )
+
+    cv.namedWindow(window_name, cv.WINDOW_NORMAL)
+    cv.setMouseCallback(window_name, mouse_callback)
+
+    while True:
+        cv.imshow(window_name, dynamic_canvas)
+        key = cv.waitKey(20) & 0xFF
+
+        if key in (ord(" "), 13):
+            if start_point and end_point:
+                dx, dy, dw, dh = normalize_rect(start_point, end_point)
+                cv.destroyWindow(window_name)
+                if dw <= 0 or dh <= 0:
+                    return []
+                p1 = display_to_source_point(dx, dy, src_w, src_h, scale_factor)
+                p2 = display_to_source_point(dx + dw, dy + dh, src_w, src_h, scale_factor)
+                x, y, w, h = normalize_rect(p1, p2)
+                return split_roi_to_grid(x, y, w, h, grid_rows, grid_cols)
+            cv.destroyWindow(window_name)
+            return []
+
+        if key == 27:
+            cv.destroyWindow(window_name)
+            return []
+
+
+def is_flat_roi(roi) -> bool:
+    """判断是否为单个矩形 ROI：[x, y, w, h]。"""
+    return (
+        isinstance(roi, (list, tuple))
+        and len(roi) >= 4
+        and not isinstance(roi[0], (list, tuple, np.ndarray))
+    )
+
+
+def is_grid_roi(roi) -> bool:
+    """判断是否为网格 ROI（二维或一维 cell 列表）。"""
+    if not isinstance(roi, (list, tuple)) or len(roi) == 0:
+        return False
+    first = roi[0]
+    if not isinstance(first, (list, tuple)):
+        return False
+    if len(first) >= 4 and not isinstance(first[0], (list, tuple, np.ndarray)):
+        return True  # 一维 cell 列表
+    if len(first) > 0 and isinstance(first[0], (list, tuple)):
+        return True  # 二维网格
+    return False
+
+
+def _normalize_flat_roi_to_image(roi, img_w: int, img_h: int):
+    """将单个 ROI 限制在图像范围内；无效返回 None。"""
+    if not is_flat_roi(roi) or img_w <= 0 or img_h <= 0:
+        return None
+    x, y, w, h = int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3])
+    if w <= 0 or h <= 0:
+        return None
+    x = max(0, min(x, img_w - 1))
+    y = max(0, min(y, img_h - 1))
+    w = max(1, min(w, img_w - x))
+    h = max(1, min(h, img_h - y))
+    return [x, y, w, h]
+
+
+def normalize_grid_search_roi(search_roi, img_w: int, img_h: int, grid_rows: int, grid_cols: int):
+    """
+    归一化网格 ROI，返回二维 `[rows][cols][x,y,w,h]`。
+    仅接受网格结构，不做 flat->grid 自动迁移。
+    """
+    if img_w <= 0 or img_h <= 0 or grid_rows <= 0 or grid_cols <= 0:
+        return None
+    if not is_grid_roi(search_roi):
+        return None
+
+    cells = []
+    # 二维: rows x cols x 4
+    if (
+        len(search_roi) == grid_rows
+        and isinstance(search_roi[0], (list, tuple))
+        and len(search_roi[0]) > 0
+        and isinstance(search_roi[0][0], (list, tuple))
+    ):
+        for r in range(grid_rows):
+            row = search_roi[r]
+            if not isinstance(row, (list, tuple)) or len(row) != grid_cols:
+                return None
+            for c in range(grid_cols):
+                normalized = _normalize_flat_roi_to_image(row[c], img_w, img_h)
+                if normalized is None:
+                    return None
+                cells.append(normalized)
+    else:
+        # 一维: (rows*cols) x 4
+        expected = grid_rows * grid_cols
+        if len(search_roi) != expected:
+            return None
+        for cell in search_roi:
+            normalized = _normalize_flat_roi_to_image(cell, img_w, img_h)
+            if normalized is None:
+                return None
+            cells.append(normalized)
+
+    out = []
+    idx = 0
+    for _ in range(grid_rows):
+        row = []
+        for _ in range(grid_cols):
+            row.append(cells[idx])
+            idx += 1
+        out.append(row)
+    return out
+
+
+def get_bga_animation_grid_layout(rows: int, cols: int, margin: int = 2, canvas_h: int = 480, canvas_w: int = 150):
+    """
+    计算 BGA animation 网格布局参数，与 get_full_animation 保持一致。
+    返回: (margin, block_height, block_width, img_h, img_w)
+    """
+    rows = max(1, int(rows))
+    cols = max(1, int(cols))
+    margin = max(0, int(margin))
+    block_height = max(1, int(canvas_h) // rows)
+    block_width = max(1, int(canvas_w) // cols)
+    img_h = rows * block_height + (rows + 1) * margin
+    img_w = cols * block_width + (cols + 1) * margin
+    return margin, block_height, block_width, img_h, img_w
+
+
+def build_bga_animation_cell_rects(rows: int, cols: int, margin: int = 2, canvas_h: int = 480, canvas_w: int = 150):
+    """
+    生成 animation 网格每个 cell 的像素矩形（行优先）。
+    返回: List[(row, col, x, y, w, h)]
+    """
+    margin, block_h, block_w, _, _ = get_bga_animation_grid_layout(
+        rows, cols, margin=margin, canvas_h=canvas_h, canvas_w=canvas_w
+    )
+    rects = []
+    for r in range(max(1, int(rows))):
+        for c in range(max(1, int(cols))):
+            y = margin + r * (block_h + margin)
+            x = margin + c * (block_w + margin)
+            rects.append((r, c, x, y, block_w, block_h))
+    return rects
+
+
 def create_alternating_array(rows, cols, start_element, values=(0, 3)):
     """
     创建交替填充的数组
@@ -565,14 +878,9 @@ class Bga_Strip():
         """生成完整的动画图像"""
         array = np.array(self.full_value)
         h, w = array.shape
-        # 根据整体图像比例计算方块尺寸
-        # 整体图像比例为 y:480, x:150
-        # 例如：30行5列 -> 方块尺寸 16*30 (480/30=16, 150/5=30)
-        margin = 2       # 小方块间隔
-        block_height = 480 // h  # 每个小方块的高度（像素）
-        block_width = 150 // w    # 每个小方块的宽度（像素）
-        img_h = h * block_height + (h + 1) * margin
-        img_w = w * block_width + (w + 1) * margin
+        margin, block_height, block_width, img_h, img_w = get_bga_animation_grid_layout(
+            h, w, margin=2, canvas_h=480, canvas_w=150
+        )
         # 初始化底图（灰色背景）
         img = np.full((img_h, img_w, 3), 40, dtype=np.uint8)
         

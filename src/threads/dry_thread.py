@@ -420,52 +420,31 @@ class DryThread(QThread):
                 image = cv.rotate(image,cv.ROTATE_90_CLOCKWISE) ####干燥台相机旋转90度
                 image_result = ensure_bgr_u8(image, copy=True)
 
-                #——————————————————模板图像加载（使用缓存）————————————————————————————————————
-                template = self._get_template()
-                
-                # 边界检查：模板有效性
-                if not self._check_template_valid(template):
-                    self._update_message_signal.emit("警告: 模板图像无效，跳过检测")
-                    time.sleep(0.01)
-                    continue
-                
-                template_height = template.shape[0]
-                template_width = template.shape[1]
-
-                #————————————————————检测流程（模板匹配按 current_row×current_col 网格落位）————————————————————————————————————
-                template_matches = self.template_detector.detect(template, image)
                 grid_r = int(self.bga_strip.window_rows or 0)
                 grid_c = int(self.bga_strip.window_cols or 0)
                 if grid_r <= 0 or grid_c <= 0:
                     grid_r, grid_c = 1, 1
-                search_roi = self.params.get("search_roi") or []
                 img_h, img_w = image.shape[:2]
-                pos_grid = assign_matches_to_grid(
-                    template_matches,
-                    template_width,
-                    template_height,
-                    search_roi,
-                    (img_h, img_w),
-                    grid_r,
-                    grid_c,
-                )
+                search_roi = self.params.get("search_roi") or []
+                grid_roi = normalize_grid_search_roi(search_roi, img_w, img_h, grid_r, grid_c)
+                if grid_roi is None:
+                    self._update_message_signal.emit("警告: dry search_roi 非网格结构，请重新创建 Search ROI")
+                    time.sleep(0.01)
+                    continue
                 slot = [[None] * grid_c for _ in range(grid_r)]
                 for gr in range(grid_r):
                     for gcol in range(grid_c):
-                        pos = pos_grid[gr][gcol]
-                        if pos is None:
-                            continue
-                        x, y = pos[0], pos[1]
+                        x, y, cell_w, cell_h = grid_roi[gr][gcol]
                         if not self._check_image_bounds(
-                            image, x, y, template_width, template_height
+                            image, x, y, cell_w, cell_h
                         ):
                             self._update_message_signal.emit(
-                                f"警告: 模板位置 ({x}, {y}) 超出图像边界 ({img_w}, {img_h})"
+                                f"警告: cell ROI ({x}, {y}, {cell_w}, {cell_h}) 超出图像边界 ({img_w}, {img_h})"
                             )
                             time.sleep(0.01)
                             continue
                         product_image = image[
-                            y : y + template_height, x : x + template_width
+                            y : y + cell_h, x : x + cell_w
                         ]
                         success, msg, product_info = self._detect_product(
                             x, y, product_image
@@ -488,9 +467,9 @@ class DryThread(QThread):
                             self._async_save_image(product_info["product_image_result"], filepath_result)
                             self._async_save_image(product_image, filepath_ori)
                         slot[gr][gcol] = product_info
-                        shot_centers.append((x + template_width // 2, y + template_height // 2))
-                        image_result[y : y + template_height, x : x + template_width] = product_info["product_image_result"]
-                        image_result = cv.rectangle(image_result, (x, y), (x + template_width, y + template_height), (0, 255, 255), 4)
+                        shot_centers.append((x + cell_w // 2, y + cell_h // 2))
+                        image_result[y : y + cell_h, x : x + cell_w] = product_info["product_image_result"]
+                        image_result = cv.rectangle(image_result, (x, y), (x + cell_w, y + cell_h), (0, 255, 255), 2)
                 #——————————————————更新显示和统计信息——————————————————————————————————————————————————————
 
                 self._update_image_signal.emit(image_result, self.bga_strip)

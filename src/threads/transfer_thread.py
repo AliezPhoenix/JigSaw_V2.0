@@ -425,6 +425,9 @@ class TransferThread(QThread):
                 if grid_r <= 0 or grid_c <= 0:
                     grid_r, grid_c = 1, 1
                 search_roi = self.params.get("search_roi") or []
+                if isinstance(search_roi, (list, tuple)) and len(search_roi) > 0 and isinstance(search_roi[0], (list, tuple)):
+                    self._update_message_signal.emit("警告: transfer 仅支持单矩形 search_roi，请在 transfer 重新创建 Search ROI")
+                    search_roi = []
                 img_h, img_w = image.shape[:2]
                 pos_grid = assign_matches_to_grid(
                     template_matches,

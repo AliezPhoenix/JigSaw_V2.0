@@ -17,6 +17,7 @@ from PyQt5.QtWidgets import QLabel, QApplication, QGraphicsScene, QTableWidgetIt
 import numpy as np
 from src.support.support_funs import (
     selectROI,
+    select_roi_grid,
     execute_product_detection,
     draw_detection_results,
     fulltray_load_model,
@@ -25,6 +26,9 @@ from src.support.support_funs import (
     ensure_gray_u8,
     ensure_bgr_u8,
     assign_matches_to_grid,
+    normalize_grid_search_roi,
+    is_flat_roi,
+    is_grid_roi,
 )
 from src.support.InteractiveBgaLabel import InteractiveBgaLabel
 from src.detectors.ball_detector import BallDetector
@@ -223,6 +227,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         new_label.setAlignment(Qt.AlignCenter)
         new_label.setObjectName(attr_name)
         new_label.regionClicked.connect(lambda pos, wp=work_position: self.on_bga_region_clicked(pos, wp))
+        new_label.cellClicked.connect(lambda payload, wp=work_position: self.on_bga_cell_clicked(payload, wp))
         layout.takeAt(index).widget().deleteLater()
         layout.insertWidget(index, new_label)
         setattr(self, attr_name, new_label)
@@ -381,9 +386,18 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 if _iw <= 0 or _ih <= 0:
                     continue
                 _roi = self.config_manager.get_key(_section, "search_roi", [])
-                _out = self._normalize_search_roi_to_image(_roi, _iw, _ih)
-                if _out is not None:
-                    self.config_manager.set_key(_section, "search_roi", _out)
+                if _station == "dry":
+                    _rows = int(self.config_manager.get_key(_section, "current_row", 1) or 1)
+                    _cols = int(self.config_manager.get_key(_section, "current_col", 1) or 1)
+                    _out = normalize_grid_search_roi(_roi, _iw, _ih, _rows, _cols)
+                    if _out is not None:
+                        self.config_manager.set_key(_section, "search_roi", _out)
+                    elif _roi:
+                        print("警告: dry 的 search_roi 不是合法网格结构，请重新创建 Search ROI")
+                else:
+                    _out = self._normalize_search_roi_to_image(_roi, _iw, _ih)
+                    if _out is not None:
+                        self.config_manager.set_key(_section, "search_roi", _out)
         except (ValueError, AttributeError) as e:
             print(f"_update_config_from_ui 解析错误: {e}")
             raise
@@ -1130,16 +1144,63 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             if work_position == "dry":
                 label = self.label_mapping_dry
                 label_mapping_show = self.label_image_show_mapping_1
+                params_section = "work_dry_params"
             else:
                 label = self.label_mapping_transfer
                 label_mapping_show = self.label_image_show_mapping_2
+                params_section = "work_transfer_params"
 
             label.set_bga_data(bga_instance)
+            params = self.config_manager.get_section(params_section)
+            source_image = self.current_image.get(work_position)
+            
+            grid_r = int(params.get("current_row") or 0)
+            grid_c = int(params.get("current_col") or 0)
+            grid_roi = None
+            if (
+                source_image is not None
+                and hasattr(source_image, "shape")
+                and len(source_image.shape) >= 2
+                and grid_r > 0
+                and grid_c > 0
+            ):
+                img_h, img_w = source_image.shape[:2]
+                grid_roi = normalize_grid_search_roi(
+                    params.get("search_roi") or [],
+                    img_w,
+                    img_h,
+                    grid_r,
+                    grid_c,
+                )
+            if work_position == "dry":
+                # 干燥台强制 cells 模式；若 search_roi 不是合法网格，直接抛异常，避免 payload 缺少 cell_roi
+                search_roi_raw = params.get("search_roi") or []
+                if not is_grid_roi(search_roi_raw):
+                    raise ValueError(
+                        "dry cells模式要求 work_dry_params.search_roi 为网格结构(rows x cols x [x,y,w,h])"
+                    )
+                if grid_roi is None:
+                    raise ValueError(
+                        f"dry cells模式下 search_roi 网格无效或与 current_row/current_col({grid_r}x{grid_c})不匹配"
+                    )
+                label.set_cell_rois(grid_roi)
+                label.set_interaction_mode("cells")
+            else:
+                # transfer 保持原行为：仅在存在合法 grid_roi 时才切 cells，否则沿用 pos
+                if grid_roi is not None:
+                    label.set_cell_rois(grid_roi)
+                    label.set_interaction_mode("cells")
+                else:
+                    label.set_cell_rois(None)
+                    label.set_interaction_mode("pos")
             animation = bga_instance.get_full_animation()
             self._update_label_from_image(label_mapping_show, animation)
         except Exception as e:
             print(f"更新BGA显示失败 ({work_position}): {str(e)}")
             traceback.print_exc()
+            if work_position == "dry":
+                # dry 强制 cells 模式下，让配置错误显式抛出，便于现场定位
+                raise
 
     def on_bga_region_clicked(self, pos_start, work_position="dry"):
         """BGA区域点击回调，显示对应区域的图像"""
@@ -1164,6 +1225,48 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 self.template_validity_test(work_position)
         except Exception as e:
             print(f"BGA区域点击显示错误 ({work_position}): {str(e)}")
+            traceback.print_exc()
+
+    def on_bga_cell_clicked(self, payload: dict, work_position="dry"):
+        """BGA cell 点击回调：按 cell_roi 从原图裁剪并显示。"""
+        try:
+            if not isinstance(payload, dict):
+                return
+            cell_roi = payload.get("cell_roi")
+            source_image = self.current_image.get(work_position)
+            print(f"source_image: {source_image.shape}")
+            if source_image is None:
+                print(f"{work_position} 当前无原图，无法按 cell_roi 裁剪")
+                return
+            if not (isinstance(cell_roi, (list, tuple)) and len(cell_roi) >= 4):
+                print(f"{work_position} cell payload 缺少 cell_roi: {payload}")
+                return
+            x, y, w, h = map(int, cell_roi[:4])
+            img_h, img_w = source_image.shape[:2]
+            x = max(0, min(x, img_w - 1))
+            y = max(0, min(y, img_h - 1))
+            w = max(1, min(w, img_w - x))
+            h = max(1, min(h, img_h - y))
+            crop = source_image[y:y + h, x:x + w].copy()
+
+            crop_around_x = max(0,min(x-w,img_w-1))
+            crop_around_y = max(0,min(y-h,img_h-1))
+            crop_around_w = min(3*w,img_w-crop_around_x)
+            crop_around_h = min(3*h,img_h-crop_around_y)
+            crop_around = source_image[crop_around_y:crop_around_y+crop_around_h, crop_around_x:crop_around_x+crop_around_w].copy()
+            crop_around = ensure_bgr_u8(crop_around, copy=True)
+            
+            
+            
+            if crop.size == 0 or crop_around.size == 0:
+                print(f"{work_position} cell_roi 裁剪为空: {cell_roi}")
+                return
+            crop = ensure_bgr_u8(crop, copy=True)
+            crop_around = ensure_bgr_u8(crop_around, copy=True)
+            self._update_label_from_image(getattr(self,f"label_template_display_dry"), crop)
+            self._update_label_from_image(getattr(self,f"label_current_cam_live_{work_position}"),crop_around)
+        except Exception as e:
+            print(f"BGA cell 点击显示错误 ({work_position}): {str(e)}")
             traceback.print_exc()
 
     # =============================================================================
@@ -1375,6 +1478,59 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "scratch_detector": scratch_detector,
         }
 
+        if station == "dry":
+            img_h, img_w = image.shape[:2]
+            grid_r = int(params.get("current_row") or 0)
+            grid_c = int(params.get("current_col") or 0)
+            if grid_r <= 0 or grid_c <= 0:
+                grid_r, grid_c = 1, 1
+            search_roi = params.get("search_roi") or []
+            grid_roi = normalize_grid_search_roi(search_roi, img_w, img_h, grid_r, grid_c)
+            if grid_roi is None:
+                QMessageBox.warning(self, "错误", "Dry 的 search_roi 不是有效网格结构，请重新创建 Search ROI❌")
+                return
+
+            image_result = ensure_bgr_u8(image, copy=True)
+            detect_params = {
+                "mark_check_enable": params.get("mark_check_enable", True),
+                "size_check_enable": params.get("size_check_enable", True),
+                "ball_check_enable": params.get("ball_check_enable", True),
+                "shift_check_enable": params.get("shift_check_enable", True),
+                "scratch_check_enable": params.get("scratch_check_enable", True),
+                "allow_mark": False,
+                "roi_block": params.get("roi_block", []),
+            }
+            for gr in range(grid_r):
+                for gcol in range(grid_c):
+                    x, y, w, h = grid_roi[gr][gcol]
+                    if x + w > img_w or y + h > img_h:
+                        continue
+                    product_image = image[y:y + h, x:x + w]
+                    success, msg, product_info = execute_product_detection(
+                        image=product_image,
+                        detectors=detectors,
+                        params=detect_params,
+                        detect_type=None,
+                        early_return_on_ng=True,
+                        error_callback=None,
+                    )
+                    if not success:
+                        continue
+                    product_info["x"], product_info["y"] = x, y
+                    _, _, drawn_patch = draw_detection_results(
+                        product_image.copy(),
+                        product_info,
+                        mark_color="green" if product_info.get("defect_type") == ["OK"] else "red",
+                    )
+                    if drawn_patch is not None:
+                        image_result[y:y + h, x:x + w] = drawn_patch
+                    image_result = cv.rectangle(
+                        image_result, (x, y), (x + w, y + h), (0, 255, 255), 2
+                    )
+            cv.putText(image_result, "Search ROI Grid", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+            self._update_label_from_image(self.label_current_cam_live_dry, image_result)
+            return
+
         template_path = params.get("golden_template_path")
         if not template_path or not os.path.exists(template_path):
             QMessageBox.warning(self, "错误", "模板路径无效或文件不存在❌")
@@ -1386,7 +1542,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             return
         img_h, img_w = image.shape[:2]
         search_roi = params.get("search_roi") or []
-        if not (isinstance(search_roi, (list, tuple)) and len(search_roi) >= 4):
+        if not is_flat_roi(search_roi):
             search_roi = [0, 0, img_w, img_h]
         template_detector.update_params({"template_threshold": params.get("template_threshold", 0.7), "search_roi": search_roi})
 
@@ -1478,28 +1634,68 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), image)
 
     def create_search_roi(self, station):
-        """使用 selectROI 在当前工位图像上框选 search_roi，并保存到配置。dry/transfer/fulltray 均使用 search_roi"""
+        """创建并保存 search_roi。dry 保存网格 ROI；transfer/fulltray 保存单矩形 ROI。"""
         image = self.current_image.get(station)
         if image is None:
             QMessageBox.warning(self, "错误", "请先选择当前图像❌")
             return
 
+        if station == "dry":
+            rows = int(self.config_manager.get_key("work_dry_params", "current_row", 1) or 1)
+            cols = int(self.config_manager.get_key("work_dry_params", "current_col", 1) or 1)
+            rows = max(1, rows)
+            cols = max(1, cols)
+            cells = select_roi_grid(
+                window_name="创建 Search ROI (Dry Grid)",
+                image=image,
+                grid_rows=rows,
+                grid_cols=cols,
+                show_crosshair=True,
+                rect_color=(255, 255, 0),
+                line_thickness=2,
+                max_display_edge=1500,
+            )
+            expected = rows * cols
+            if not cells or len(cells) != expected:
+                QMessageBox.information(self, "提示", "已取消创建 Search ROI 或网格数量不匹配")
+                return
+
+            grid_roi = []
+            idx = 0
+            for _ in range(rows):
+                row = []
+                for _ in range(cols):
+                    x, y, w, h = cells[idx]
+                    row.append([int(x), int(y), int(w), int(h)])
+                    idx += 1
+                grid_roi.append(row)
+
+            self.config_manager.set_key("work_dry_params", "search_roi", grid_roi)
+            display_image = ensure_bgr_u8(image, copy=True)
+            cv.putText(display_image, "Search ROI Grid", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+            for r in range(rows):
+                for c in range(cols):
+                    x, y, w, h = grid_roi[r][c]
+                    cv.rectangle(display_image, (x, y), (x + w, y + h), (255, 255, 0), 2)
+            self._update_label_from_image(self.label_current_cam_live_dry, display_image)
+            QMessageBox.information(self, "提示", f"Dry Search ROI 网格已保存 ✅\n网格: {rows}x{cols}")
+            return
+
         cv.namedWindow("创建 Search ROI", cv.WINDOW_NORMAL)
         roi = selectROI("创建 Search ROI", image, showCrosshair=True, fromCenter=False, rect_color=(255, 255, 0), line_thickness=5)
-        if roi and roi[2] > 0 and roi[3] > 0:
-            x, y, w, h = roi
-            self.config_manager.set_key(f"work_{station}_params", "search_roi", [x, y, w, h])
-            # 在图像上绘制 ROI 范围并更新显示
-            display_image = ensure_bgr_u8(image, copy=True)
-            cv.putText(display_image, "Search ROI", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
-            cv.rectangle(display_image, (x, y), (x + w, y + h), (255, 255, 0), 5)
-            if station == "fulltray":
-                self._update_fulltray_graphics_view_from_image(display_image)
-            else:
-                self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), display_image)
-            QMessageBox.information(self, "提示", f"Search ROI 已保存 ✅\n区域: ({x}, {y}) 宽{w} 高{h}")
-        else:
+        if not roi or roi[2] <= 0 or roi[3] <= 0:
             QMessageBox.information(self, "提示", "已取消创建 Search ROI")
+            return
+        x, y, w, h = roi
+        self.config_manager.set_key(f"work_{station}_params", "search_roi", [x, y, w, h])
+        display_image = ensure_bgr_u8(image, copy=True)
+        cv.putText(display_image, "Search ROI", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
+        cv.rectangle(display_image, (x, y), (x + w, y + h), (255, 255, 0), 5)
+        if station == "fulltray":
+            self._update_fulltray_graphics_view_from_image(display_image)
+        else:
+            self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), display_image)
+        QMessageBox.information(self, "提示", f"Search ROI 已保存 ✅\n区域: ({x}, {y}) 宽{w} 高{h}")
 
     # =============================================================================
     # 11. 满盘功能

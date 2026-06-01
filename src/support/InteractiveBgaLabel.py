@@ -3,33 +3,43 @@
 实现与OpenCV版本相同的功能：鼠标移动到区域时显示框选，点击时输出pos起始位置
 """
 
-from PyQt5.QtWidgets import QLabel, QWidget
+from PyQt5.QtWidgets import QLabel
 from PyQt5.QtCore import Qt, QRect, pyqtSignal, QPoint
-from PyQt5.QtGui import QPainter, QPen, QPixmap, QImage, QColor
-import numpy as np
+from PyQt5.QtGui import QPainter, QPixmap, QImage
 import cv2 as cv
 
-from src.support.support_funs import Bga_Strip
+from src.support.support_funs import Bga_Strip, get_bga_animation_grid_layout
 
 
 class InteractiveBgaLabel(QLabel):
-    """交互式BGA显示标签，支持区域检测和鼠标交互"""
+    """交互式BGA显示标签，支持 pos/cells 双模式交互"""
     
     # 信号：当点击区域时发出，参数为pos起始位置 (row, col)
     regionClicked = pyqtSignal(tuple)
+    # 信号：当点击 cell 时发出，参数为 dict payload
+    cellClicked = pyqtSignal(dict)
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)  # 启用鼠标跟踪
         self.setAlignment(Qt.AlignCenter)  # 图像居中显示
         self.setScaledContents(False)  # 不自动拉伸，保持宽高比
-        # 存储区域信息
-        self.regions = []  # 每个元素包含区域信息和像素坐标
+        # 交互模式: "pos" / "cells"
+        self.interaction_mode = "pos"
+
+        # 区域信息
+        self.regions = []       # pos 级区域
+        self.cell_regions = []  # cell 级区域（行优先）
         self.original_image = None  # 原始numpy图像
         self.original_pixmap = None  # 原始QPixmap
+        self.bga = None
         
-        # 当前鼠标所在的区域
-        self.current_region = None
+        # 可选：由主窗提供，按行优先的一维原图 ROI 列表 [(x,y,w,h), ...]
+        self.cell_roi_flat = []
+        
+        # 当前鼠标命中目标
+        self.current_region = None   # pos 模式
+        self.current_cell = None     # cells 模式
         
         # 图像参数（与get_full_animation保持一致）
         self.margin = 2
@@ -77,7 +87,42 @@ class InteractiveBgaLabel(QLabel):
         
         return (scale, scale, display_rect)
         
-    def set_bga_data(self, bga_strip_log_instance:'Bga_Strip'):
+    def set_interaction_mode(self, mode: str):
+        """设置交互模式，非法值回退到 pos。"""
+        mode = str(mode or "pos").lower()
+        self.interaction_mode = "cells" if mode == "cells" else "pos"
+        self.current_region = None
+        self.current_cell = None
+        pixmap = self._create_overlay_pixmap()
+        if pixmap:
+            self.setPixmap(pixmap)
+            self.update()
+
+    def set_cell_rois(self, cell_rois):
+        """
+        设置 cell 对应原图 ROI。支持：
+        - 二维: rows x cols x [x,y,w,h]
+        - 一维: n x [x,y,w,h]
+        """
+        self.cell_roi_flat = []
+        if not isinstance(cell_rois, (list, tuple)) or len(cell_rois) == 0:
+            return
+        first = cell_rois[0]
+        if isinstance(first, (list, tuple)) and len(first) > 0 and isinstance(first[0], (list, tuple)):
+            # 二维
+            for row in cell_rois:
+                if not isinstance(row, (list, tuple)):
+                    continue
+                for cell in row:
+                    if isinstance(cell, (list, tuple)) and len(cell) >= 4:
+                        self.cell_roi_flat.append((int(cell[0]), int(cell[1]), int(cell[2]), int(cell[3])))
+        else:
+            # 一维
+            for cell in cell_rois:
+                if isinstance(cell, (list, tuple)) and len(cell) >= 4:
+                    self.cell_roi_flat.append((int(cell[0]), int(cell[1]), int(cell[2]), int(cell[3])))
+
+    def set_bga_data(self, bga_strip_log_instance: 'Bga_Strip'):
         """
         设置BGA数据并初始化显示
         
@@ -98,8 +143,11 @@ class InteractiveBgaLabel(QLabel):
         qt_image = QImage(img_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
         self.original_pixmap = QPixmap.fromImage(qt_image)
         
-        # 计算区域信息
+        # 计算区域信息（pos + cells）
         self._calculate_regions()
+        self._calculate_cells_regions()
+        self.current_region = None
+        self.current_cell = None
         
         # 清除当前pixmap，让paintEvent处理缩放显示
         self.setPixmap(QPixmap())
@@ -118,10 +166,13 @@ class InteractiveBgaLabel(QLabel):
         self.regions = []
         
         # 根据整体图像比例计算方块尺寸（与get_full_animation保持一致）
-        # 整体图像比例为 y:480, x:150
         h, w = self.bga.full_value.shape
-        self.block_height = 480 // h  # 每个小方块的高度（像素）
-        self.block_width = 150 // w   # 每个小方块的宽度（像素）
+        margin, block_h, block_w, _, _ = get_bga_animation_grid_layout(
+            h, w, margin=self.margin, canvas_h=480, canvas_w=150
+        )
+        self.margin = margin
+        self.block_height = block_h
+        self.block_width = block_w
         
         for pos in self.bga.position_list:
             row_start, col_start, row_end, col_end, \
@@ -141,6 +192,31 @@ class InteractiveBgaLabel(QLabel):
                 'x_end': x_end,
                 'y_end': y_end
             })
+
+    def _calculate_cells_regions(self):
+        """计算每个 cell 在 animation 上的像素区域（行优先）。"""
+        self.cell_regions = []
+        if self.bga is None:
+            return
+        h, w = self.bga.full_value.shape
+        if h <= 0 or w <= 0:
+            return
+        margin, block_h, block_w, _, _ = get_bga_animation_grid_layout(
+            h, w, margin=self.margin, canvas_h=480, canvas_w=150
+        )
+        for r in range(h):
+            for c in range(w):
+                x_start = margin + c * (block_w + margin)
+                y_start = margin + r * (block_h + margin)
+                self.cell_regions.append({
+                    "idx": r * w + c,
+                    "grid_row_0": r,
+                    "grid_col_0": c,
+                    "x_start": x_start,
+                    "y_start": y_start,
+                    "x_end": x_start + block_w,
+                    "y_end": y_start + block_h,
+                })
     
     def _label_to_image_coords(self, label_point):
         """
@@ -206,29 +282,50 @@ class InteractiveBgaLabel(QLabel):
                 return region
         
         return None
+
+    def _find_cell_at_point(self, image_point):
+        """查找指定图像坐标点所在的 cell。"""
+        if image_point is None:
+            return None
+        x, y = image_point.x(), image_point.y()
+        for cell in self.cell_regions:
+            if (cell["x_start"] <= x < cell["x_end"] and
+                cell["y_start"] <= y < cell["y_end"]):
+                return cell
+        return None
     
-    def _create_image_with_region(self, region=None):
+    def _create_overlay_pixmap(self):
         """
-        在原始图像上绘制矩形框，然后转换为QPixmap
-        
-        参数:
-            region: 要绘制的区域，如果为None则不绘制矩形框
-            
-        返回:
-            QPixmap: 带矩形框的图像
+        按当前交互模式绘制叠加层并返回 QPixmap。
         """
         if self.original_image is None:
             return None
         
-        # 复制原始图像（避免修改原始数据）
         display_img = self.original_image.copy()
-        
-        # 如果有区域，绘制矩形框
-        if region is not None:
-            cv.rectangle(display_img,
-                        (region['x_start'], region['y_start']),
-                        (region['x_end'], region['y_end']),
-                        (255, 0, 255), 3)  # BGR格式，紫色，线宽3
+
+        if self.interaction_mode == "cells":
+            for cell in self.cell_regions:
+                cv.rectangle(
+                    display_img,
+                    (cell["x_start"], cell["y_start"]),
+                    (cell["x_end"], cell["y_end"]),
+                    (70, 70, 70), 1,
+                )
+            if self.current_cell is not None:
+                cv.rectangle(
+                    display_img,
+                    (self.current_cell["x_start"], self.current_cell["y_start"]),
+                    (self.current_cell["x_end"], self.current_cell["y_end"]),
+                    (255, 0, 255), 2,
+                )
+        else:
+            if self.current_region is not None:
+                cv.rectangle(
+                    display_img,
+                    (self.current_region["x_start"], self.current_region["y_start"]),
+                    (self.current_region["x_end"], self.current_region["y_end"]),
+                    (255, 0, 255), 3,
+                )
         
         # 转换numpy数组为QPixmap
         img_rgb = cv.cvtColor(display_img, cv.COLOR_BGR2RGB)
@@ -239,52 +336,76 @@ class InteractiveBgaLabel(QLabel):
     
     def mouseMoveEvent(self, event):
         """鼠标移动事件处理"""
-        # 将QLabel坐标转换为图像坐标
         image_point = self._label_to_image_coords(event.pos())
-        
-        # 查找鼠标所在的区域
-        new_region = self._find_region_at_point(image_point)
-        
-        # 如果区域发生变化，更新显示
-        if new_region != self.current_region:
-            self.current_region = new_region
-            # 在原始图像上绘制矩形框（如果有区域），然后更新pixmap
-            # paintEvent会手动处理缩放以保持宽高比
-            pixmap = self._create_image_with_region(self.current_region)
+        changed = False
+
+        if self.interaction_mode == "cells":
+            new_cell = self._find_cell_at_point(image_point)
+            if new_cell != self.current_cell:
+                self.current_cell = new_cell
+                changed = True
+        else:
+            new_region = self._find_region_at_point(image_point)
+            if new_region != self.current_region:
+                self.current_region = new_region
+                changed = True
+
+        if changed:
+            pixmap = self._create_overlay_pixmap()
             if pixmap:
                 self.setPixmap(pixmap)
-                self.update()  # 触发重绘
+                self.update()
     
     def leaveEvent(self, event):
         """鼠标离开事件处理，清除矩形框"""
-        if self.current_region is not None:
+        if self.current_region is not None or self.current_cell is not None:
             self.current_region = None
-            # 恢复原始图像（不绘制矩形框）
+            self.current_cell = None
             if self.original_pixmap:
                 self.setPixmap(self.original_pixmap)
-                self.update()  # 触发重绘
+                self.update()
     
     def mousePressEvent(self, event):
         """鼠标点击事件处理"""
-        if event.button() == Qt.LeftButton:
-            # 将QLabel坐标转换为图像坐标
-            image_point = self._label_to_image_coords(event.pos())
-            
-            # 查找点击位置所在的区域
-            clicked_region = self._find_region_at_point(image_point)
-            
-            if clicked_region is not None:
-                pos_start = clicked_region['pos_start']
-                print(f"点击区域 - pos起始位置: (row={pos_start[0]}, col={pos_start[1]})")
-                
-                # 发出信号
-                self.regionClicked.emit(pos_start)
-                
-                # 可选：显示对应的图像
-                # current_image = self.bga.get_pos_image(pos_start)
-                # 可以在这里打开一个新窗口显示图像，或通过信号传递
-            else:
-                print(f"点击位置不在任何区域内")
+        if event.button() != Qt.LeftButton:
+            return
+
+        image_point = self._label_to_image_coords(event.pos())
+        if self.interaction_mode == "cells":
+            clicked_cell = self._find_cell_at_point(image_point)
+            if clicked_cell is None:
+                print("点击位置不在任何 cell 内")
+                return
+            payload = {
+                "grid_row_0": clicked_cell["grid_row_0"],
+                "grid_col_0": clicked_cell["grid_col_0"],
+                "cell_rect_on_animation": (
+                    clicked_cell["x_start"],
+                    clicked_cell["y_start"],
+                    clicked_cell["x_end"] - clicked_cell["x_start"],
+                    clicked_cell["y_end"] - clicked_cell["y_start"],
+                ),
+            }
+            if self.bga is not None:
+                try:
+                    payload["mask_value"] = int(
+                        self.bga.full_value[clicked_cell["grid_row_0"], clicked_cell["grid_col_0"]]
+                    )
+                except Exception:
+                    payload["mask_value"] = None
+            idx = clicked_cell["idx"]
+            if 0 <= idx < len(self.cell_roi_flat):
+                payload["cell_roi"] = self.cell_roi_flat[idx]
+            self.cellClicked.emit(payload)
+            return
+
+        clicked_region = self._find_region_at_point(image_point)
+        if clicked_region is not None:
+            pos_start = clicked_region['pos_start']
+            print(f"点击区域 - pos起始位置: (row={pos_start[0]}, col={pos_start[1]})")
+            self.regionClicked.emit(pos_start)
+        else:
+            print("点击位置不在任何区域内")
     
     def paintEvent(self, event):
         """绘制事件，手动绘制图像以保持宽高比"""
