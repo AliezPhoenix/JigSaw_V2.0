@@ -515,10 +515,10 @@ class LineScanCamera(_CameraCommon):
         self._buf_cache = None
         self._img_buff = None
         self._cached_frame_size = 0
-        MvCamera.MV_CC_Initialize()
 
     def Open_device(self):
         if False == self.b_open_device:
+            MvCamera.MV_CC_Initialize()
             device_list = MV_CC_DEVICE_INFO_LIST()
             t_layer_type = (MV_GIGE_DEVICE | MV_USB_DEVICE | MV_GENTL_CAMERALINK_DEVICE
                             | MV_GENTL_CXP_DEVICE | MV_GENTL_XOF_DEVICE)
@@ -542,13 +542,17 @@ class LineScanCamera(_CameraCommon):
             return 0,"Success"
     def Close_device(self):
         if False == self.b_open_device:
-            return 1,"device not open!"
+            return 1, "device not open!"
         ret = self.obj_cam.MV_CC_CloseDevice()
         if ret != 0:
-            return ret,"close device fail! ret[0x%x]" % ret
+            return ret, "close device fail! ret[0x%x]" % ret
+        self.obj_cam.MV_CC_DestroyHandle()
         self.b_open_device = False
+        self.b_start_grabbing = False
         self.b_thread_closed = True
-        return 0,"Success"
+        self.b_exit = True
+        print("close device successfully!")
+        return 0, "Success"
 
     def Start_grabbing(self):
         if False == self.b_open_device:
@@ -564,7 +568,24 @@ class LineScanCamera(_CameraCommon):
         if True == self.b_start_grabbing and self.b_open_device == True:
             ret = self.obj_cam.MV_CC_StopGrabbing()
             if ret != 0:
-                return ret,"stop grabbing fail! ret[0x%x]" % ret                       
+                return ret, "stop grabbing fail! ret[0x%x]" % ret
+            self.b_start_grabbing = False
+            print("stop grabbing successfully!")
+            return 0, "Success"
+        return 0, "Success"
+
+    def Get_parameter(self, parameter_type=None):
+        st_float_param = MVCC_FLOATVALUE()
+        memset(byref(st_float_param), 0, sizeof(MVCC_FLOATVALUE))
+
+        if parameter_type is None or not self.b_open_device:
+            return None
+
+        ret = self.obj_cam.MV_CC_GetFloatValue(parameter_type, st_float_param)
+        if ret != 0:
+            print(f"获取 {parameter_type} 失败，ret = {ret}")
+            return None
+        return st_float_param.fCurValue
 
     def Get_image(self):
         self.st_frame_info = MV_FRAME_OUT()
@@ -577,25 +598,75 @@ class LineScanCamera(_CameraCommon):
         self.obj_cam.MV_CC_FreeImageBuffer(self.st_frame_info)
         return opencv_image
 
-    def Set_parameter(self,parameter_name,parameter_type,value):
+    _FLOAT_PARAM_NAMES = frozenset(
+        {"ExposureTime", "Gain", "Gamma", "AcquisitionFrameRate"}
+    )
+
+    def Set_parameter(self, parameter_name, parameter_type=None, value=None):
+        """兼容面阵两参数 (name, value) 与线扫三参数 (name, type, value) 调用。"""
+        if value is not None:
+            return self._set_parameter_typed(parameter_name, parameter_type, value)
+        value = parameter_type
+        param_type = "FloatValue" if parameter_name in self._FLOAT_PARAM_NAMES else "FloatValue"
+        return self._set_parameter_typed(parameter_name, param_type, value)
+
+    def _set_parameter_typed(self, parameter_name, parameter_type, value):
+        if not self.b_open_device:
+            return 1, "Please Open Device First"
         if parameter_type == "EnumValue":
-            ret = self.obj_cam.MV_CC_SetEnumValue(parameter_name,int(value))
+            ret = self.obj_cam.MV_CC_SetEnumValue(parameter_name, int(value))
             if ret != 0:
-                return ret,"set enum value fail! ret[0x%x]" % ret
+                return ret, "set enum value fail! ret[0x%x]" % ret
         elif parameter_type == "FloatValue":
-            ret = self.obj_cam.MV_CC_SetFloatValue(parameter_name,float(value))
+            ret = self.obj_cam.MV_CC_SetFloatValue(parameter_name, float(value))
             if ret != 0:
-                return ret,"set float value fail! ret[0x%x]" % ret
+                return ret, "set float value fail! ret[0x%x]" % ret
         elif parameter_type == "IntValue":
-            ret = self.obj_cam.MV_CC_SetIntValueEx(parameter_name,int(value))
+            ret = self.obj_cam.MV_CC_SetIntValueEx(parameter_name, int(value))
             if ret != 0:
-                return ret,"set int value fail! ret[0x%x]" % ret
+                return ret, "set int value fail! ret[0x%x]" % ret
         elif parameter_type == "BoolValue":
-            ret = self.obj_cam.MV_CC_SetBoolValue(parameter_name,c_bool(value))
+            ret = self.obj_cam.MV_CC_SetBoolValue(parameter_name, c_bool(value))
             if ret != 0:
-                return ret,"set bool value fail! ret[0x%x]" % ret
+                return ret, "set bool value fail! ret[0x%x]" % ret
         elif parameter_type == "StringValue":
-            ret = self.obj_cam.MV_CC_SetStringValue(parameter_name,value)
+            ret = self.obj_cam.MV_CC_SetStringValue(parameter_name, value)
             if ret != 0:
-                return ret,"set string value fail! ret[0x%x]" % ret
-        return 0,"Success"
+                return ret, "set string value fail! ret[0x%x]" % ret
+        return 0, "Success"
+
+    def Get_current_user_set(self):
+        if not self.b_open_device:
+            return 1, 0
+        try:
+            st_enum_value = MVCC_ENUMVALUE()
+            memset(byref(st_enum_value), 0, sizeof(MVCC_ENUMVALUE))
+            ret = self.obj_cam.MV_CC_GetEnumValue("UserSetSelector", st_enum_value)
+            if ret == 0:
+                return 0, st_enum_value.nCurValue
+            ret = self.obj_cam.MV_CC_GetEnumValue("UserSetDefault", st_enum_value)
+            if ret == 0:
+                return 0, st_enum_value.nCurValue
+            print(f"获取用户集失败，使用默认UserSet0，ret = {self.to_hex_str(ret)}")
+            return 0, 0
+        except Exception as e:
+            print(f"获取用户集异常：{str(e)}，使用默认UserSet0")
+            return 0, 0
+
+    def Save_to_user_set(self, user_set_index=None):
+        if not self.b_open_device:
+            return 1, "设备未打开"
+        try:
+            if user_set_index is None:
+                ret_get, user_set_index = self.Get_current_user_set()
+                if ret_get != 0:
+                    user_set_index = 0
+            ret = self.obj_cam.MV_CC_SetEnumValue("UserSetSelector", user_set_index)
+            if ret != 0:
+                return ret, f"设置UserSetSelector失败，ret = {self.to_hex_str(ret)}"
+            ret = self.obj_cam.MV_CC_SetCommandValue("UserSetSave")
+            if ret != 0:
+                return ret, f"执行UserSetSave失败，ret = {self.to_hex_str(ret)}"
+            return 0, f"参数已成功保存到UserSet{user_set_index}"
+        except Exception as e:
+            return 1, f"保存到用户集失败：{str(e)}"

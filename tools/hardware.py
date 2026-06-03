@@ -2,124 +2,220 @@ import numpy as np
 import threading
 import time
 from ctypes import *
+from typing import Union
 from tools.MvImport.MvCameraControl_class import MvCamera
 from tools.MvImport.CameraParams_const import *
 from tools.MvImport.MvErrorDefine_const import *
-from tools.Camera import CameraController
+from tools.Camera import CameraController, LineScanCamera
 import cv2 as cv
 import modbus_tk.modbus_tcp as modbus_tcp
 import modbus_tk.defines as cst
 
 
+CAMERA_TYPE_AREA = "Area"
+CAMERA_TYPE_LINE = "Line"
+
+CameraInstance = Union[CameraController, LineScanCamera]
+
+
 class Hardware_Manager:
     """
     硬件管理类
-    
-    管理多个相机实例，支持通过IP地址连接、拍照、参数设置等功能
-    线程安全：不同线程可以同时操作不同的相机实例
-    
-    设计说明：
-    - 直接存储CameraController实例，不维护额外的状态信息
-    - 在初始化时创建CameraController（包含MvCamera实例）
-    - 使用CameraController的b_open_device和b_start_grabbing属性判断状态
+
+    管理多个相机实例，支持面阵（Area）与线扫（Line）两种类型。
+    线程安全：不同线程可以同时操作不同的相机实例。
     """
 
     def __init__(self, hardware_id_list: list = None):
         """
         初始化硬件管理器
-        
+
         Args:
-            hardware_id_list: 硬件ID列表，格式为 [{"alias": "CAM_1", "port_ip": "192.168.1.10", "device_ip": "192.168.1.100"}, ...]
-                            如果为None，则创建空的管理器
+            hardware_id_list: 硬件配置列表，每项示例：
+                面阵: {"alias": "CAM_1", "camera_type": "Area", "port_ip": "...", "device_ip": "..."}
+                线扫: {"alias": "CAM_1", "camera_type": "Line", "device_index": 0}
+                camera_type 缺省为 Area；Line 的 device_index 缺省为 0
         """
-        # 使用字典存储CameraController实例，key为别名
-        self.hardware_dict: dict[str, CameraController] = {}
-        # 线程锁，保护hardware_dict的访问（多线程环境下保护字典操作）
+        self.hardware_dict: dict[str, CameraInstance] = {}
+        self._camera_types: dict[str, str] = {}
         self._lock = threading.Lock()
-        
-        # 如果提供了硬件ID列表，则初始化创建CameraController
+
         if hardware_id_list:
             for hw_info in hardware_id_list:
                 alias = hw_info.get("alias")
-                port_ip = hw_info.get("port_ip")
-                device_ip = hw_info.get("device_ip")
-                if alias and port_ip and device_ip:
-                    self.add_camera(alias, port_ip, device_ip)
-    
-    def add_camera(self, alias: str, port_ip: str, device_ip: str) -> tuple:
+                if alias:
+                    self.add_camera(hw_info)
+
+    @staticmethod
+    def _normalize_camera_type(hw_info: dict) -> str:
+        camera_type = hw_info.get("camera_type", CAMERA_TYPE_AREA)
+        if camera_type not in (CAMERA_TYPE_AREA, CAMERA_TYPE_LINE):
+            raise ValueError(f"不支持的 camera_type: {camera_type}")
+        return camera_type
+
+    def _create_camera(self, hw_info: dict) -> CameraInstance:
+        camera_type = self._normalize_camera_type(hw_info)
+        if camera_type == CAMERA_TYPE_LINE:
+            return LineScanCamera(
+                obj_cam=MvCamera(),
+                netIp=hw_info.get("port_ip", ""),
+                deviceIp=hw_info.get("device_ip", ""),
+                device_index=hw_info.get("device_index", 0),
+            )
+        return CameraController(
+            obj_cam=MvCamera(),
+            netIp=hw_info["port_ip"],
+            deviceIp=hw_info["device_ip"],
+        )
+
+    def _camera_type(self, alias: str) -> str:
+        return self._camera_types.get(alias, CAMERA_TYPE_AREA)
+
+    def _is_line(self, alias: str) -> bool:
+        return self._camera_type(alias) == CAMERA_TYPE_LINE
+
+    def _open_device(self, camera: CameraInstance, camera_type: str) -> tuple:
+        if camera_type == CAMERA_TYPE_LINE:
+            result = camera.Open_device()
+            if isinstance(result, tuple):
+                ret, msg = result
+                if ret != 0:
+                    return False, msg or f"开启相机失败，错误码: 0x{ret:08x}", ret
+                return True, None, ret
+            if result != MV_OK:
+                return False, f"开启相机失败，错误码: 0x{result:08x}", result
+            return True, None, result
+
+        nRet = camera.Open_device()
+        if nRet != MV_OK:
+            error_msg = f"开启相机失败，错误码: 0x{nRet:08x}"
+            if nRet == 0x80000206:
+                error_msg += " (网络错误，请检查port_ip和device_ip配置及网络连接)"
+            elif nRet == 0x80000221:
+                error_msg += " (IP冲突)"
+            elif nRet == 0x80000203:
+                error_msg += " (设备无访问权限)"
+            elif nRet == 0x80000204:
+                error_msg += " (设备忙或网络断开)"
+            return False, error_msg, nRet
+        return True, None, nRet
+
+    def _start_grabbing(self, camera: CameraInstance, camera_type: str) -> tuple:
+        if camera_type == CAMERA_TYPE_LINE:
+            result = camera.Start_grabbing()
+            if isinstance(result, tuple):
+                ret, msg = result
+                if ret != 0:
+                    return False, msg or f"开始取流失败，错误码: 0x{ret:08x}"
+                return True, None
+            return True, None
+
+        camera.Start_grabbing()
+        return True, None
+
+    def _stop_grabbing(self, camera: CameraInstance, camera_type: str) -> None:
+        if not camera.b_start_grabbing:
+            return
+        if camera_type == CAMERA_TYPE_LINE:
+            result = camera.Stop_grabbing()
+            if isinstance(result, tuple):
+                ret, msg = result
+                if ret != 0:
+                    print(f"停止取流失败: {msg}")
+            return
+        camera.Stop_grabbing()
+
+    def _close_device(self, camera: CameraInstance, camera_type: str) -> None:
+        if not camera.b_open_device:
+            return
+        if camera_type == CAMERA_TYPE_LINE:
+            result = camera.Close_device()
+            if isinstance(result, tuple):
+                ret, msg = result
+                if ret != 0:
+                    print(f"关闭设备失败: {msg}")
+            return
+        camera.Close_device()
+
+    def _get_image(self, camera: CameraInstance, camera_type: str):
+        image = camera.Get_image()
+        if camera_type == CAMERA_TYPE_LINE:
+            if isinstance(image, tuple):
+                return None
+            return image
+
+        if image is None:
+            return None
+        if len(image.shape) == 3 and image.shape[2] == 3:
+            image = cv.cvtColor(image, cv.COLOR_RGB2BGR)
+        return image
+
+    def add_camera(self, hw_info: dict) -> tuple:
         """
-        添加相机实例（创建CameraController）
-        
+        添加相机实例
+
         Args:
-            alias: 相机别名
-            port_ip: 主机网口IP
-            device_ip: 相机IP
-            
+            hw_info: 相机配置字典，需包含 alias；面阵需 port_ip/device_ip，线扫需 device_index（可选，默认0）
+
         Returns:
-            (成功标志, 消息, 结果)，成功时返回 (True, "相机添加成功", None)，失败时返回 (False, 错误消息, None)
+            (成功标志, 消息, 结果)
         """
+        alias = hw_info.get("alias")
+        if not alias:
+            return False, "缺少 alias", None
+
+        try:
+            camera_type = self._normalize_camera_type(hw_info)
+        except ValueError as e:
+            return False, str(e), None
+
+        if camera_type == CAMERA_TYPE_AREA:
+            if not hw_info.get("port_ip") or not hw_info.get("device_ip"):
+                return False, "面阵相机需要 port_ip 和 device_ip", None
+
         with self._lock:
-            # 检查别名是否已存在
             if alias in self.hardware_dict:
                 return False, "别名已存在", None
-            
+
             try:
-                # 创建MvCamera实例
-                obj_cam = MvCamera()
-                
-                # 创建CameraController实例
-                camera_controller = CameraController(
-                    obj_cam=obj_cam,
-                    netIp=port_ip,
-                    deviceIp=device_ip
-                )
-                
-                self.hardware_dict[alias] = camera_controller
+                camera = self._create_camera(hw_info)
+                self.hardware_dict[alias] = camera
+                self._camera_types[alias] = camera_type
                 return True, "相机添加成功", None
             except Exception as e:
                 return False, f"创建相机失败: {str(e)}", None
-     
+
     def connect(self, alias: str) -> tuple:
         """
         连接指定相机
-        
+
         Args:
             alias: 相机别名
-            
+
         Returns:
-            (成功标志, 消息, 结果)，成功时返回 (True, "相机连接成功", None)，失败时返回 (False, 错误消息, None)
+            (成功标志, 消息, 结果)
         """
         with self._lock:
             if alias not in self.hardware_dict:
                 return False, "相机不存在", None
-            
-            camera_controller = self.hardware_dict[alias]
-        
-        # 在锁外执行连接操作，因为连接可能耗时较长
-        # 如果相机已连接，先关闭
-        if camera_controller.b_open_device:
+            camera = self.hardware_dict[alias]
+            camera_type = self._camera_type(alias)
+
+        if camera.b_open_device:
             success, msg, _ = self.close_camera(alias)
             if not success:
                 return False, f"关闭现有连接失败: {msg}", None
-        
+
         try:
-            # 打开设备（使用CameraController的Open_device方法）
-            nRet = camera_controller.Open_device()
-            if nRet != MV_OK:
-                error_msg = f"开启相机失败，错误码: 0x{nRet:08x}"
-                if nRet == 0x80000206:  # MV_E_NETER
-                    error_msg += " (网络错误，请检查port_ip和device_ip配置及网络连接)"
-                elif nRet == 0x80000221:  # MV_E_IP_CONFLICT
-                    error_msg += " (IP冲突)"
-                elif nRet == 0x80000203:  # MV_E_ACCESS_DENIED
-                    error_msg += " (设备无访问权限)"
-                elif nRet == 0x80000204:  # MV_E_BUSY
-                    error_msg += " (设备忙或网络断开)"
+            success, error_msg, _ = self._open_device(camera, camera_type)
+            if not success:
                 return False, error_msg, None
-            
-            # 开始取流
-            camera_controller.Start_grabbing()
-            
+
+            success, error_msg = self._start_grabbing(camera, camera_type)
+            if not success:
+                self._close_device(camera, camera_type)
+                return False, error_msg, None
+
             return True, "相机连接成功", None
         except Exception as e:
             return False, f"连接异常: {str(e)}", None
@@ -149,19 +245,12 @@ class Hardware_Manager:
         with self._lock:
             if alias not in self.hardware_dict:
                 return False, "相机不存在", None
-            
-            camera_controller = self.hardware_dict[alias]
-        
-        # 在锁外执行关闭操作
+            camera = self.hardware_dict[alias]
+            camera_type = self._camera_type(alias)
+
         try:
-            # 停止取流
-            if camera_controller.b_start_grabbing:
-                camera_controller.Stop_grabbing()
-            
-            # 关闭设备（使用CameraController的Close_device方法）
-            if camera_controller.b_open_device:
-                camera_controller.Close_device()
-            
+            self._stop_grabbing(camera, camera_type)
+            self._close_device(camera, camera_type)
             return True, "相机关闭成功", None
         except Exception as e:
             return False, f"关闭异常: {str(e)}", None
@@ -212,28 +301,17 @@ class Hardware_Manager:
         with self._lock:
             if alias not in self.hardware_dict:
                 return False, "相机不存在", None
-            
-            camera_controller = self.hardware_dict[alias]
-        
-        # 检查相机是否已连接并正在取流
-        if not camera_controller.b_open_device or not camera_controller.b_start_grabbing:
+            camera = self.hardware_dict[alias]
+            camera_type = self._camera_type(alias)
+
+        if not camera.b_open_device or not camera.b_start_grabbing:
             return False, "相机未连接或未开始取流", None
-        
-        # 使用CameraController的Get_image方法获取图像
+
         try:
-            image = camera_controller.Get_image()
+            image = self._get_image(camera, camera_type)
             if image is None:
                 return False, "获取图像数据为空", None
-            
-            # CameraController的Color_numpy返回的是RGB格式（R,G,B通道顺序）
-            # 需要转换为BGR（OpenCV格式）
-            # 检查图像维度
-            if len(image.shape) == 3 and image.shape[2] == 3:
-                # RGB格式，转换为BGR（交换R和B通道）
-                image = cv.cvtColor(image, cv.COLOR_RGB2BGR)
-            
             return True, "图像获取成功", image
-            
         except Exception as e:
             return False, f"获取图像异常: {str(e)}", None
     
@@ -252,21 +330,16 @@ class Hardware_Manager:
         with self._lock:
             if alias not in self.hardware_dict:
                 return False, "相机不存在", None
-            
-            camera_controller = self.hardware_dict[alias]
-        
-        # 检查相机是否已连接
-        if not camera_controller.b_open_device:
+            camera = self.hardware_dict[alias]
+
+        if not camera.b_open_device:
             return False, "相机未连接", None
-        
+
         try:
-            # 使用CameraController的Get_parameter方法
-            value = camera_controller.Get_parameter(param_name)
+            value = camera.Get_parameter(param_name)
             if value is None:
                 return False, f"参数 {param_name} 获取失败或不存在", None
-            
             return True, "参数获取成功", value
-                
         except Exception as e:
             return False, f"获取参数异常: {str(e)}", None
     
@@ -285,21 +358,16 @@ class Hardware_Manager:
         with self._lock:
             if alias not in self.hardware_dict:
                 return False, "相机不存在", None
-            
-            camera_controller = self.hardware_dict[alias]
-        
-        # 检查相机是否已连接
-        if not camera_controller.b_open_device:
+            camera = self.hardware_dict[alias]
+
+        if not camera.b_open_device:
             return False, "相机未连接", None
-        
+
         try:
-            # 使用CameraController的Set_parameter方法
-            ret, msg = camera_controller.Set_parameter(param_name, value)
+            ret, msg = camera.Set_parameter(param_name, value)
             if ret != MV_OK:
                 return False, f"参数设置失败: {msg}", None
-            
             return True, "参数设置成功", None
-                
         except Exception as e:
             return False, f"设置参数异常: {str(e)}", None
     
@@ -328,8 +396,8 @@ class Hardware_Manager:
         with self._lock:
             if alias not in self.hardware_dict:
                 return False, "相机不存在", None
-            camera_controller = self.hardware_dict[alias]
-            is_conn = camera_controller.b_open_device
+            camera = self.hardware_dict[alias]
+            is_conn = camera.b_open_device
             return True, "检查成功", is_conn
     
     def is_grabbing(self, alias: str) -> tuple:
@@ -346,8 +414,8 @@ class Hardware_Manager:
         with self._lock:
             if alias not in self.hardware_dict:
                 return False, "相机不存在", None
-            camera_controller = self.hardware_dict[alias]
-            is_grab = camera_controller.b_start_grabbing
+            camera = self.hardware_dict[alias]
+            is_grab = camera.b_start_grabbing
             return True, "检查成功", is_grab
     
     def save_to_userSet(self, alias: str, user_set_index: int = None) -> tuple:
@@ -364,21 +432,19 @@ class Hardware_Manager:
         with self._lock:
             if alias not in self.hardware_dict:
                 return False, "相机不存在", None
-            
-            camera_controller = self.hardware_dict[alias]
-        
-        # 检查相机是否已连接
-        if not camera_controller.b_open_device:
+            camera = self.hardware_dict[alias]
+
+        if not camera.b_open_device:
             return False, "相机未连接", None
-        
+
+        if not hasattr(camera, "Save_to_user_set"):
+            return False, "线扫相机不支持用户集保存", None
+
         try:
-            # 调用CameraController的Save_to_user_set方法
-            ret, msg = camera_controller.Save_to_user_set(user_set_index)
+            ret, msg = camera.Save_to_user_set(user_set_index)
             if ret != 0:
                 return False, f"保存用户集失败: {msg}", None
-            
             return True, "保存用户集成功", None
-            
         except Exception as e:
             return False, f"保存用户集异常: {str(e)}", None
 
