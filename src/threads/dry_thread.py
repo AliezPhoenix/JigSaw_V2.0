@@ -105,7 +105,8 @@ class DryThread(QThread):
 
         self.template_detect_params = {
             "template_threshold": self.params.get("template_threshold", 0.7),
-            "search_roi": self.params.get("search_roi", [])
+            "search_roi": self.params.get("search_roi", []),
+            "use_pyramid": True,
         }
 
         self.scratch_detect_params = {
@@ -552,24 +553,6 @@ class DryThread(QThread):
             trigger_camera_last = trigger_camera
             trigger_finished_last = trigger_finished
             trigger_count_last = trigger_count
-            #————————————————————————实时显示画面————————————————————
-            if self.ui.radioButton_live_dry.isChecked():
-                #——————————————————只有在没有处理触发信号时才更新实时显示，避免重复采集图像————————————————————————————————————
-                if not ((trigger_camera and not trigger_camera_last) or (trigger_finished and not trigger_finished_last)):
-                    #——————————————————采集图像————————————————————
-                    ret,msg, image_live = self.HM.capture_image("dry_cam")
-                    if not ret:
-                        self._update_message_signal.emit(f"采集图像失败: {msg}")
-                        continue
-                    h, w = image_live.shape[:2]
-                    
-                    image_live_bgr = ensure_bgr_u8(image_live, copy=True)
-                    image_live_bgr = cv.rotate(image_live_bgr, cv.ROTATE_90_CLOCKWISE)
-                    cv.line(image_live_bgr, (0, h // 2), (w, h // 2), (0, 255, 0), 2)
-                    cv.line(image_live_bgr, (w // 2, 0), (w // 2, h), (0, 255, 0), 2)
-                    self._update_image_signal.emit(image_live_bgr,None)
-            else:
-                time.sleep(0.01)
             
             #———————————————————垃圾回收————————————————————————————
             self.gc_counter += 1

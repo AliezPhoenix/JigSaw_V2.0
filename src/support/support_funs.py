@@ -1492,7 +1492,7 @@ def draw_detection_results(image_result: np.ndarray, product_info: dict,
                 x2 = max(0, min(x2, img_w-1))
                 y2 = max(0, min(y2, img_h-1))
                 cv.rectangle(image_result, (x1, y1), (x2, y2), 
-                            COLOR_GREEN if is_valid else COLOR_RED, 4)
+                            COLOR_GREEN if is_valid else COLOR_RED,2)
         except Exception as e:
             error_messages.append(f"绘制尺寸结果错误: {e}")
     
@@ -1531,7 +1531,7 @@ def draw_detection_results(image_result: np.ndarray, product_info: dict,
                     else:
                         x, y, w, h = 0, 0, 0, 0
                     if check_image_bounds(image_result, x, y, w, h):
-                        cv.rectangle(image_result, (x, y), (x+w, y+h), COLOR_RED, 3)
+                        cv.rectangle(image_result, (x, y), (x+w, y+h), COLOR_RED, 2)
                 except Exception as e:
                     error_messages.append(f"绘制NG球结果错误: {e}")
         except Exception as e:
@@ -1630,8 +1630,8 @@ def draw_detection_results(image_result: np.ndarray, product_info: dict,
                 if (0 <= ball_x < img_w and 0 <= ball_y < img_h and 
                     0 <= size_x < img_w and 0 <= size_y < img_h):
                     cv.arrowedLine(image_result, (size_x, size_y), (ball_x, ball_y), 
-                                 COLOR_GREEN if is_valid_shift else COLOR_RED, 3, tipLength=10)
-                    cv.line(image_result, (size_x, size_y), (ball_x, ball_y), COLOR_GREEN if is_valid_shift else COLOR_RED, 3,cv.LINE_8)
+                                 COLOR_GREEN if is_valid_shift else COLOR_RED, 2, tipLength=5)
+                    cv.line(image_result, (size_x, size_y), (ball_x, ball_y), COLOR_GREEN if is_valid_shift else COLOR_RED, 2,cv.LINE_8)
         except Exception as e:
             error_messages.append(f"绘制shift结果错误: {e}")
     

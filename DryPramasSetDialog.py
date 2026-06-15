@@ -204,30 +204,19 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         label.update()
         QApplication.processEvents()
 
-    def _pixmap_to_bgr_image(self, pixmap: QPixmap):
-        """
-        将 QLabel/QPixmap 图像转换为 OpenCV 可处理的 BGR uint8 ndarray。
-        返回 None 表示转换失败或 pixmap 无效。
-        """
-        if pixmap is None or pixmap.isNull():
-            return None
-        try:
-            qimg = pixmap.toImage().convertToFormat(QImage.Format_RGBA8888)
-            width = qimg.width()
-            height = qimg.height()
-            if width <= 0 or height <= 0:
-                return None
+    def _load_template_from_config(self):
+        """从配方路径加载原始模板图像（避免从主界面 QLabel 缩放 pixmap 反读导致尺寸错误）。"""
+        template_path = self.config_manager.get_key("work_dry_params", "golden_template_path")
+        if not template_path:
+            return False
+        template = cv.imread(template_path)
+        if template is None:
+            return False
+        self.template_image = template.copy()
+        return True
 
-            ptr = qimg.bits()
-            ptr.setsize(qimg.byteCount())
-            # bytesPerLine 可能包含对齐填充，按 stride reshape 后再裁到真实 width
-            stride = qimg.bytesPerLine() // 4
-            rgba = np.frombuffer(ptr, dtype=np.uint8).reshape((height, stride, 4))[:, :width, :]
-            bgr = cv.cvtColor(rgba, cv.COLOR_RGBA2BGR)
-            return bgr.copy()
-        except Exception:
-            return None
-        
+
+
     def _update_template_display_with_markers(self):
         """更新模板显示，包括绘制ROI屏蔽区域和Mark检测区域"""
         if self.template_image is None:
@@ -749,17 +738,15 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 self.lineEdit_shift_y_tolerance.setText(str(shift_y_tolerance))
                 # 确保UI更新完成，特别是label的尺寸
                 QApplication.processEvents()
-            
-                parent_label = getattr(self.parent(), "label_template_display_dry") 
-                template_pixmap = parent_label.pixmap() 
-                template_image = self._pixmap_to_bgr_image(template_pixmap)
-                if template_image is not None:
-                    self.template_image = template_image
-                    print(f"template_image: {self.template_image.shape}")
-                    QApplication.processEvents()
+
+                if self._load_template_from_config():
                     self._update_template_display_with_markers()
                 else:
-                    QMessageBox.warning(self, "警告", "无法从模板显示区域读取有效图像，请先加载模板图像")
+                    template_path = self.config_manager.get_key("work_dry_params", "golden_template_path")
+                    if template_path:
+                        QMessageBox.warning(self, "警告", f"无法读取模板文件: {template_path}")
+                    else:
+                        QMessageBox.warning(self, "警告", "未配置模板路径，请先加载模板图像")
                 QApplication.processEvents()
                 QMessageBox.information(self, "成功", "参数已成功加载")
             
