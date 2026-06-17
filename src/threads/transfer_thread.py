@@ -400,6 +400,7 @@ class TransferThread(QThread):
                 #——————————————————图像采集——————————————————————————————
                 ret,msg,image = self.HM.capture_image("transfer_cam")
                 if not ret:
+                    print(f"采集图像失败: {msg}")
                     self._update_message_signal.emit(f"采集图像失败: {msg}")
                     time.sleep(0.01)
                     continue

@@ -1,0 +1,29 @@
+PS D:\JIGSAW> D:\JIGSAW\JigSaw_v2.exe
+Traceback (most recent call last):
+  File "PyInstaller\loader\pyimod03_ctypes.py", line 77, in __init__
+  File "ctypes\__init__.py", line 374, in __init__
+FileNotFoundError: Could not find module 'MvCameraControl.dll' (or one of its dependencies). Try using the full path with constructor syntax.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "main.py", line 1, in <module>
+  File "<frozen importlib._bootstrap>", line 1007, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 986, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 680, in _load_unlocked
+  File "PyInstaller\loader\pyimod02_importers.py", line 450, in exec_module
+  File "main_window.py", line 5, in <module>
+  File "<frozen importlib._bootstrap>", line 1007, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 986, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 680, in _load_unlocked
+  File "PyInstaller\loader\pyimod02_importers.py", line 450, in exec_module
+  File "tools\MvImport\__init__.py", line 20, in <module>
+  File "<frozen importlib._bootstrap>", line 1007, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 986, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 680, in _load_unlocked
+  File "PyInstaller\loader\pyimod02_importers.py", line 450, in exec_module
+  File "tools\MvImport\MvCameraControl_class.py", line 77, in <module>
+  File "tools\MvImport\MvCameraControl_class.py", line 48, in check_sys_and_update_dll
+  File "PyInstaller\loader\pyimod03_ctypes.py", line 79, in __init__
+pyimod03_ctypes.install.<locals>.PyInstallerImportError: Failed to load dynlib/dll 'MvCameraControl.dll'. Most likely this dynlib/dll was not found when the application was frozen.
+[PYI-2788:ERROR] Failed to execute script 'main' due to unhandled exception!

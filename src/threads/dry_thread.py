@@ -398,54 +398,77 @@ class DryThread(QThread):
                     strip_side=self.current_side,
                     params_summary=self._params_summary_for_log(),
                 )
-            #——————————————————————检测触发————————————————————————————————
-            if (trigger_camera and not trigger_camera_last) or (trigger_finished and not trigger_finished_last):
+            #——————————————————————检测触发（camera 与 finished 同周期上沿）————————————————————————————————
+            shot_trigger = (
+                trigger_camera and not trigger_camera_last
+                and trigger_finished and not trigger_finished_last
+            )
+            if shot_trigger:
                 self.alarm_sent_current = False
-                _shot_src = "camera" if (trigger_camera and not trigger_camera_last) else "finished_edge"
                 shot_centers = []
                 log_operation(
                     "DryThread",
                     "单次拍照触发",
                     level=logging.INFO,
-                    trigger_source=_shot_src,
                     strip_side=self.current_side,
                     lot_id=getattr(self.bga_strip, "strip_lot", "") or "未设置",
                     sn=getattr(self.bga_strip, "strip_sn", "") or "未设置",
                 )
                 #——————————————————图像采集——————————————————————————————
+                self.HM.start_grabbing("dry_cam")
+                self.MM.write(alias="dry_modbus",address = 5,value_list=[1],function_code=cst.WRITE_SINGLE_COIL)
                 ret,msg,image = self.HM.capture_image("dry_cam")
+                self.HM.stop_grabbing("dry_cam")
+                
+                
                 if not ret or debug:
                     self._update_message_signal.emit(f"采集图像失败: {msg}")
                     time.sleep(0.01)
                     continue
                 image = cv.rotate(image,cv.ROTATE_90_CLOCKWISE) ####干燥台相机旋转90度
                 image_result = ensure_bgr_u8(image, copy=True)
+                template = self._get_template()
+                if not self._check_template_valid(template):
+                    self._update_message_signal.emit("警告: 模板图像无效，跳过检测")
+                    time.sleep(0.01)
+                    continue
 
+
+
+                ###模板匹配流程
+                template_matches = self.template_detector.detect(template, image)
+                template_h, template_w = template.shape[:2]
                 grid_r = int(self.bga_strip.window_rows or 0)
                 grid_c = int(self.bga_strip.window_cols or 0)
                 if grid_r <= 0 or grid_c <= 0:
                     grid_r, grid_c = 1, 1
-                img_h, img_w = image.shape[:2]
-                search_roi = self.params.get("search_roi") or []
-                grid_roi = normalize_grid_search_roi(search_roi, img_w, img_h, grid_r, grid_c)
-                if grid_roi is None:
-                    self._update_message_signal.emit("警告: dry search_roi 非网格结构，请重新创建 Search ROI")
-                    time.sleep(0.01)
-                    continue
+                pos_grid = assign_matches_to_grid(
+                    template_matches,
+                    template_w,
+                    template_h,
+                    self.params.get("search_roi", []),
+                    (image.shape[0], image.shape[1]),
+                    grid_r,
+                    grid_c,
+                )
+
                 slot = [[None] * grid_c for _ in range(grid_r)]
                 for gr in range(grid_r):
                     for gcol in range(grid_c):
-                        x, y, cell_w, cell_h = grid_roi[gr][gcol]
+                        pos = pos_grid[gr][gcol]
+                        if pos is None:
+                            continue
+                        x, y = pos[0], pos[1]
                         if not self._check_image_bounds(
-                            image, x, y, cell_w, cell_h
+                            image, x, y, template_w, template_h
                         ):
                             self._update_message_signal.emit(
-                                f"警告: cell ROI ({x}, {y}, {cell_w}, {cell_h}) 超出图像边界 ({img_w}, {img_h})"
+                                f"警告: cell ROI ({x}, {y}) 超出图像边界 ({image.shape[1]}, {image.shape[0]})"
                             )
                             time.sleep(0.01)
                             continue
                         product_image = image[
-                            y : y + cell_h, x : x + cell_w
+                            y : y + template_h, x : x + template_w
                         ]
                         success, msg, product_info = self._detect_product(
                             x, y, product_image
@@ -458,19 +481,16 @@ class DryThread(QThread):
                             )
                             self._async_save_image(product_image, filepath_ori)
                         if "OK" not in product_info["defect_type"]:
-                            defect_type = (
-                                product_info["defect_type"][0]
-                                if len(product_info["defect_type"]) > 1
-                                else "UNKNOWN"
-                            )
+                            dts = product_info["defect_type"]
+                            defect_type = dts[0] if dts else "UNKNOWN"
                             filepath_result = self._generate_image_filename(defect_type)
                             filepath_ori = self._generate_image_filename("ORI")
                             self._async_save_image(product_info["product_image_result"], filepath_result)
                             self._async_save_image(product_image, filepath_ori)
                         slot[gr][gcol] = product_info
-                        shot_centers.append((x + cell_w // 2, y + cell_h // 2))
-                        image_result[y : y + cell_h, x : x + cell_w] = product_info["product_image_result"]
-                        image_result = cv.rectangle(image_result, (x, y), (x + cell_w, y + cell_h), (0, 255, 255), 2)
+                        shot_centers.append((x + template_w // 2, y + template_h // 2))
+                        image_result[y : y + template_h, x : x + template_w] = product_info["product_image_result"]
+                        image_result = cv.rectangle(image_result, (x, y), (x + template_w, y + template_h), (0, 255, 255), 2)
                 #——————————————————更新显示和统计信息——————————————————————————————————————————————————————
 
                 self._update_image_signal.emit(image_result, self.bga_strip)
@@ -507,46 +527,27 @@ class DryThread(QThread):
                         print(f"NG监控 Modbus 写入异常: {e}")
                 
                 
-                #———————————————————strip完成相关流程————————————————————————————————————————————————————————————————————
-                strip_done_modbus = (
-                    trigger_finished == 1
-                    and trigger_finished_last == 0
-                    and (trigger_front == 1 or trigger_back == 1)
-                )
+                #———————————————————strip完成（每次触发均完成）————————————————————————————————————————————————————————————————————
                 allow_handshake = self._dry_plc_allow_handshake()
-                if strip_done_modbus:
-                    if stats_info:
-                        self._lot_stats["total_count"] += stats_info.get("total_count", 0)
-                        self._lot_stats["ng_count"] += stats_info.get("ng_count", 0)
-                        for k, v in (stats_info.get("defect_counts") or {}).items():
-                            self._lot_stats["defect_counts"][k] = self._lot_stats["defect_counts"].get(k, 0) + v
+                if stats_info:
+                    self._lot_stats["total_count"] += stats_info.get("total_count", 0)
+                    self._lot_stats["ng_count"] += stats_info.get("ng_count", 0)
+                    for k, v in (stats_info.get("defect_counts") or {}).items():
+                        self._lot_stats["defect_counts"][k] = self._lot_stats["defect_counts"].get(k, 0) + v
+                if allow_handshake:
+                    self._dry_finish_strip_log_and_coil(mode, ng_sectors)
+                final_alarm = check_ng_alarm(stats_info, ng_monitor) if stats_info else 0
+                if final_alarm == 0 and self._last_alarm_code != 0:
+                    try:
+                        self.MM.write(alias="dry_modbus", address=1, value_list=[0], function_code=cst.WRITE_SINGLE_REGISTER)
+                        self._last_alarm_code = 0
+                    except Exception as e:
+                        print(f"NG监控 复位 Modbus 写入异常: {e}")
+                self._update_statistics_signal.emit(self._build_lot_stats_for_emit(None, is_strip_finished=True))
 
-                    if allow_handshake:
-                        self._dry_finish_strip_log_and_coil(mode,ng_sectors)
-
-                    #——————————————————————警告复位————————————————————————————
-                    final_alarm = check_ng_alarm(stats_info, ng_monitor) if stats_info else 0
-                    if final_alarm == 0 and self._last_alarm_code != 0:
-                        try:
-                            self.MM.write(alias="dry_modbus", address=1, value_list=[0], function_code=cst.WRITE_SINGLE_REGISTER)
-                            self._last_alarm_code = 0
-                        except Exception as e:
-                            print(f"NG监控 复位 Modbus 写入异常: {e}")
-
-                    # strip 已完成：只发一次 lot 级完工统计（避免与下方「进行中」合并重复双计）
-                    lot_emit = self._build_lot_stats_for_emit(None, is_strip_finished=True)
-                    self._update_statistics_signal.emit(lot_emit)
-
-                elif allow_handshake:
-                    self.MM.write(alias="dry_modbus", address=0, value_list=[1], function_code=cst.WRITE_SINGLE_COIL)
-
-                #———————————————————统计信息写入——————————————————————————
-                if stats_info and not strip_done_modbus:
-                    merged = self._build_lot_stats_for_emit(stats_info, is_strip_finished=False)
-                    self._update_statistics_signal.emit(merged)
-                
             elif trigger_camera ==0 and trigger_finished == 0:
                 self.MM.write(alias="dry_modbus",address = 0,value_list=[0],function_code=cst.WRITE_SINGLE_COIL)
+                self.MM.write(alias="dry_modbus",address = 5,value_list=[0],function_code=cst.WRITE_SINGLE_COIL)
             else:
                 self.MM.write(alias="dry_modbus",address = 1,value_list=[0],function_code=cst.WRITE_SINGLE_COIL)
                 self.MM.write(alias="dry_modbus",address = 2,value_list=[0],function_code=cst.WRITE_SINGLE_COIL)

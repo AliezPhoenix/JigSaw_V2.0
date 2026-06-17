@@ -3,6 +3,7 @@ import cv2 as cv
 import time
 from PIL import Image
 from ctypes import *
+
 from tools.MvImport.MvCameraControl_class import *
 from tools.MvImport.CameraParams_header import MVCC_ENUMVALUE
 
@@ -57,6 +58,48 @@ class _CameraCommon:
 
         return None
 
+    _FLOAT_PARAM_NAMES = frozenset(
+        {"ExposureTime", "Gain", "Gamma", "AcquisitionFrameRate"}
+    )
+
+    def Set_parameter(self, parameter_name, parameter_type=None, value=None):
+        """设置相机参数。两参数 (name, value) 或三参数 (name, type, value)。"""
+        if parameter_name is None:
+            return 1, "Please Enter a Parameter Type"
+        if value is not None:
+            return self._set_parameter_typed(parameter_name, parameter_type, value)
+        value = parameter_type
+        if value is None:
+            return 1, "Please Enter a Parameter Value"
+        param_type = "FloatValue"
+        return self._set_parameter_typed(parameter_name, param_type, value)
+
+    def _set_parameter_typed(self, parameter_name, parameter_type, value):
+        if not self.b_open_device:
+            return 1, "Please Open Device First"
+        if parameter_type == "EnumValue":
+            ret = self.obj_cam.MV_CC_SetEnumValue(parameter_name, int(value))
+            if ret != 0:
+                return ret, "set enum value fail! ret[0x%x]" % ret
+        elif parameter_type == "FloatValue":
+            ret = self.obj_cam.MV_CC_SetFloatValue(parameter_name, float(value))
+            if ret != 0:
+                return ret, "set float value fail! ret[0x%x]" % ret
+        elif parameter_type == "IntValue":
+            ret = self.obj_cam.MV_CC_SetIntValueEx(parameter_name, int(value))
+            if ret != 0:
+                return ret, "set int value fail! ret[0x%x]" % ret
+        elif parameter_type == "BoolValue":
+            ret = self.obj_cam.MV_CC_SetBoolValue(parameter_name, c_bool(value))
+            if ret != 0:
+                return ret, "set bool value fail! ret[0x%x]" % ret
+        elif parameter_type == "StringValue":
+            ret = self.obj_cam.MV_CC_SetStringValue(parameter_name, value)
+            if ret != 0:
+                return ret, "set string value fail! ret[0x%x]" % ret
+        else:
+            return 1, f"Unsupported parameter type: {parameter_type}"
+        return 0, "Success"
 
 
 class CameraController(_CameraCommon):
@@ -83,15 +126,13 @@ class CameraController(_CameraCommon):
         self.frame_rate = frame_rate
         self.exposure_time = exposure_time
         self.gain = gain
-        # 飞拍优化：缓存缓冲区，避免重复分配
-        self._buf_cache = None
-        self._img_buff = None
-        self._cached_frame_size = 0
 
     def To_hex_str(self,num):
         return self.to_hex_str(num)
 
     def Open_device(self):
+        if self.b_open_device:
+            return 0, "Success"
         if False == self.b_open_device:
             stDevInfo = MV_CC_DEVICE_INFO()
             stGigEDev = MV_GIGE_DEVICE_INFO()
@@ -107,12 +148,12 @@ class CameraController(_CameraCommon):
             if ret != 0:
                 self.obj_cam.MV_CC_DestroyHandle()
                 print('show error','create handle fail! ret = '+ self.To_hex_str(ret))
-                return ret
+                return ret, "create handle fail! ret = " + self.To_hex_str(ret)
 
             ret = self.obj_cam.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
             if ret != 0:
                 print('show error','open device fail! ret = '+ self.To_hex_str(ret))
-                return ret
+                return ret, "open device fail! ret = " + self.To_hex_str(ret)
             print ("open device successfully!")
             self.b_open_device = True
             self.b_thread_closed = False
@@ -136,41 +177,47 @@ class CameraController(_CameraCommon):
             ret = self.obj_cam.MV_CC_SetEnumValue("TriggerMode", MV_TRIGGER_MODE_OFF)
             if ret != 0:
                 print ("set trigger mode fail! ret[0x%x]" % ret)
-            return 0
+            return 0, "Success"
 
     def Start_grabbing(self):
-        if False == self.b_start_grabbing and True == self.b_open_device:
-            self.b_exit = False
-            ret = self.obj_cam.MV_CC_StartGrabbing()
-            if ret != 0:
-                print('show error','start grabbing fail! ret = '+ self.To_hex_str(ret))
-                return
-            self.b_start_grabbing = True
-            print ("start grabbing successfully!")
+        if not self.b_open_device:
+            return 1, "device not open!"
+        if self.b_start_grabbing:
+            return 0, "Success"
+        self.b_exit = False
+        ret = self.obj_cam.MV_CC_StartGrabbing()
+        if ret != 0:
+            print('show error','start grabbing fail! ret = '+ self.To_hex_str(ret))
+            return ret, "start grabbing fail! ret = " + self.To_hex_str(ret)
+        self.b_start_grabbing = True
+        print ("start grabbing successfully!")
+        return 0, "Success"
 
     def Stop_grabbing(self):
-        if True == self.b_start_grabbing and self.b_open_device == True:
-            ret = self.obj_cam.MV_CC_StopGrabbing()
-            if ret != 0:
-                print('show error','stop grabbing fail! ret = '+self.To_hex_str(ret))
-                return
-            print ("stop grabbing successfully!")
-            self.b_start_grabbing = False
-            self.b_exit  = True      
+        if not self.b_start_grabbing or not self.b_open_device:
+            return 0, "Success"
+        ret = self.obj_cam.MV_CC_StopGrabbing()
+        if ret != 0:
+            print('show error','stop grabbing fail! ret = '+self.To_hex_str(ret))
+            return ret, "stop grabbing fail! ret = " + self.To_hex_str(ret)
+        print ("stop grabbing successfully!")
+        self.b_start_grabbing = False
+        self.b_exit  = True
+        return 0, "Success"
 
     def Close_device(self):
-        if True == self.b_open_device:
-            ret = self.obj_cam.MV_CC_CloseDevice()
-            if ret != 0:
-                print('show error','close deivce fail! ret = '+self.To_hex_str(ret))
-                return
-                
-        # ch:销毁句柄 | Destroy handle
+        if not self.b_open_device:
+            return 1, "device not open!"
+        ret = self.obj_cam.MV_CC_CloseDevice()
+        if ret != 0:
+            print('show error','close deivce fail! ret = '+self.To_hex_str(ret))
+            return ret, "close device fail! ret = " + self.To_hex_str(ret)
         self.obj_cam.MV_CC_DestroyHandle()
         self.b_open_device = False
         self.b_start_grabbing = False
         self.b_exit  = True
         print ("close device successfully!")
+        return 0, "Success"
 
     def Set_trigger_mode(self,strMode):
         if True == self.b_open_device:
@@ -205,33 +252,7 @@ class CameraController(_CameraCommon):
             print(f"获取 {parameter_type} 失败，ret = {ret}")
             return None
         return st_float_param.fCurValue
-      
-    def Set_parameter(self ,parameter_type = None,value = None):
-        ret = 0
-        if parameter_type is None or value is None:
-            return 1, "Please Enter a Parameter Type"
-        if self.b_open_device == False:
-            return 1, "Please Open Device First"
-        else:
-            if parameter_type == 'AcquisitionFrameRate':
-                ret = self.obj_cam.MV_CC_SetFloatValue("AcquisitionFrameRate", float(value))
-                if ret != 0:
-                    return ret,"set parameter fail! ret = "+self.To_hex_str(ret)
-            if parameter_type == 'ExposureTime':
-                ret = self.obj_cam.MV_CC_SetFloatValue("ExposureTime",float(value))
-                if ret != 0:
-                    return ret,"set exposure time fail! ret = "+self.To_hex_str(ret)
-            if parameter_type == 'Gain':
-                ret = self.obj_cam.MV_CC_SetFloatValue("Gain",float(value))
-                if ret != 0:
-                    return ret,"set gain fail! ret = "+self.To_hex_str(ret)
-            if parameter_type == "Gamma":
-                ret = self.obj_cam.MV_CC_SetFloatValue("Gamma",float(value))
-                if ret != 0:
-                    return ret,"set gamma fail! ret = "+self.To_hex_str(ret)
- 
-        return ret,"Success"
-    
+
     def Get_current_user_set(self):
         """获取当前使用的用户集
         
@@ -302,110 +323,28 @@ class CameraController(_CameraCommon):
             numpy.ndarray: 图像数组，失败返回None
         """
         stOutFrame = MV_FRAME_OUT()
+        memset(byref(stOutFrame), 0, sizeof(stOutFrame))
         retry_counter = 0
         max_retries = 2  # 快速模式：减少重试次数
-        timeout_ms = 100  # 快速模式：减少超时时间
+        timeout_ms = 1000 # 快速模式：减少超时时间
         
         while True:
             ret = self.obj_cam.MV_CC_GetImageBuffer(stOutFrame, timeout_ms)
-            if 0 == ret:
-                # 获取帧信息
-                self.st_frame_info = stOutFrame.stFrameInfo
-                frame_len = self.st_frame_info.nFrameLen
-                
-                # 缓存缓冲区：只在大小变化时重新分配
-                if self._buf_cache is None or self._cached_frame_size != frame_len:
-                    self._buf_cache = (c_ubyte * frame_len)()
-                    self._cached_frame_size = frame_len
-                
-                buf_cache = self._buf_cache
-                
-                # 复制图像数据
-                cdll.msvcrt.memcpy(byref(buf_cache), stOutFrame.pBufAddr, frame_len)
-                
-                # 跳过同步保存操作（应在异步线程中处理）
-                # 注意：如需保存图像，请在异步线程中调用Save_jpg或Save_Bmp
-                
-                # 像素格式处理
-                pixel_type = self.st_frame_info.enPixelType
-                width = self.st_frame_info.nWidth
-                height = self.st_frame_info.nHeight
-                
-                # 直接处理常见格式，避免不必要的转换
-                if PixelType_Gvsp_RGB8_Packed == pixel_type:
-                    # RGB8直接转换
-                    numArray = CameraController.Color_numpy(self, buf_cache, width, height)
-                elif PixelType_Gvsp_Mono8 == pixel_type:
-                    # Mono8直接转换
-                    numArray = CameraController.Mono_numpy(self, buf_cache, width, height)
-                else:
-                    # 需要格式转换
-                    # 预分配转换缓冲区（仅在需要时）
-                    if self.Is_color_data(pixel_type):
-                        nConvertSize = width * height * 3
-                        if self._img_buff is None or len(self._img_buff) < nConvertSize:
-                            self._img_buff = (c_ubyte * nConvertSize)()
-                        
-                        stConvertParam = MV_CC_PIXEL_CONVERT_PARAM()
-                        memset(byref(stConvertParam), 0, sizeof(stConvertParam))
-                        stConvertParam.nWidth = width
-                        stConvertParam.nHeight = height
-                        stConvertParam.pSrcData = cast(buf_cache, POINTER(c_ubyte))
-                        stConvertParam.nSrcDataLen = frame_len
-                        stConvertParam.enSrcPixelType = pixel_type
-                        stConvertParam.enDstPixelType = PixelType_Gvsp_RGB8_Packed
-                        stConvertParam.pDstBuffer = self._img_buff
-                        stConvertParam.nDstBufferSize = nConvertSize
-                        
-                        ret = self.obj_cam.MV_CC_ConvertPixelType(stConvertParam)
-                        if ret != 0:
-                            self.obj_cam.MV_CC_FreeImageBuffer(stOutFrame)
-                            retry_counter += 1
-                            if retry_counter >= max_retries:
-                                return None
-                            continue
-                        
-                        numArray = CameraController.Color_numpy(self, self._img_buff, width, height)
-                    elif self.Is_mono_data(pixel_type):
-                        nConvertSize = width * height
-                        if self._img_buff is None or len(self._img_buff) < nConvertSize:
-                            self._img_buff = (c_ubyte * nConvertSize)()
-                        
-                        stConvertParam = MV_CC_PIXEL_CONVERT_PARAM()
-                        memset(byref(stConvertParam), 0, sizeof(stConvertParam))
-                        stConvertParam.nWidth = width
-                        stConvertParam.nHeight = height
-                        stConvertParam.pSrcData = cast(buf_cache, POINTER(c_ubyte))
-                        stConvertParam.nSrcDataLen = frame_len
-                        stConvertParam.enSrcPixelType = pixel_type
-                        stConvertParam.enDstPixelType = PixelType_Gvsp_Mono8
-                        stConvertParam.pDstBuffer = self._img_buff
-                        stConvertParam.nDstBufferSize = nConvertSize
-                        
-                        ret = self.obj_cam.MV_CC_ConvertPixelType(stConvertParam)
-                        if ret != 0:
-                            self.obj_cam.MV_CC_FreeImageBuffer(stOutFrame)
-                            retry_counter += 1
-                            if retry_counter >= max_retries:
-                                return None
-                            continue
-                        
-                        numArray = CameraController.Mono_numpy(self, self._img_buff, width, height)
-                    else:
-                        # 未知格式
-                        self.obj_cam.MV_CC_FreeImageBuffer(stOutFrame)
-                        return None
-                
-                # 释放缓冲区
-                self.obj_cam.MV_CC_FreeImageBuffer(stOutFrame)
-                
-                # 直接返回numpy数组
-                return numArray
-            else:
+            if ret != 0 or stOutFrame.pBufAddr is None:
                 retry_counter += 1
                 if retry_counter >= max_retries:
                     return None
                 continue
+
+            self.st_frame_info = stOutFrame.stFrameInfo
+            opencv_image = self.frame_to_opencv_image(stOutFrame, stOutFrame.pBufAddr)
+            self.obj_cam.MV_CC_FreeImageBuffer(stOutFrame)
+            if opencv_image is None:
+                retry_counter += 1
+                if retry_counter >= max_retries:
+                    return None
+                continue
+            return opencv_image
 
     def Save_jpg(self,buf_cache):
         if(None == buf_cache):
@@ -511,12 +450,10 @@ class LineScanCamera(_CameraCommon):
         self.frame_rate = frame_rate
         self.exposure_time = exposure_time
         self.gain = gain
-        # 飞拍优化：缓存缓冲区，避免重复分配
-        self._buf_cache = None
-        self._img_buff = None
-        self._cached_frame_size = 0
 
     def Open_device(self):
+        if self.b_open_device:
+            return 0, "Success"
         if False == self.b_open_device:
             MvCamera.MV_CC_Initialize()
             device_list = MV_CC_DEVICE_INFO_LIST()
@@ -537,6 +474,14 @@ class LineScanCamera(_CameraCommon):
             if ret != 0:
                 return ret,"open device fail! ret[0x%x]" % ret
             print("open device successfully!")
+            ret = self.obj_cam.MV_CC_SetEnumValue("UserSetSelector", 1)
+            if ret != 0:
+                return ret,"set user set selector fail! ret[0x%x]" % ret
+
+            ret = self.obj_cam.MV_CC_SetCommandValue("UserSetLoad")
+            if ret != 0:
+                return ret,"load user set fail! ret[0x%x]" % ret
+
             self.b_open_device = True
             self.b_thread_closed = False
             return 0,"Success"
@@ -557,6 +502,8 @@ class LineScanCamera(_CameraCommon):
     def Start_grabbing(self):
         if False == self.b_open_device:
             return 1,"device not open!"
+        if self.b_start_grabbing:
+            return 0, "Success"
         ret = self.obj_cam.MV_CC_StartGrabbing()
         if ret != 0:
             return ret,"start grabbing fail! ret[0x%x]" % ret
@@ -590,50 +537,20 @@ class LineScanCamera(_CameraCommon):
     def Get_image(self):
         self.st_frame_info = MV_FRAME_OUT()
         memset(byref(self.st_frame_info), 0, sizeof(self.st_frame_info))
-        ret =self.obj_cam.MV_CC_GetImageBuffer(self.st_frame_info, 1000)
-        if ret != 0:
-            return ret,"get image buffer fail! ret[0x%x]" % ret
-        
-        opencv_image =self.frame_to_opencv_image(self.st_frame_info, self.st_frame_info.pBufAddr)
-        self.obj_cam.MV_CC_FreeImageBuffer(self.st_frame_info)
-        return opencv_image
-
-    _FLOAT_PARAM_NAMES = frozenset(
-        {"ExposureTime", "Gain", "Gamma", "AcquisitionFrameRate"}
-    )
-
-    def Set_parameter(self, parameter_name, parameter_type=None, value=None):
-        """兼容面阵两参数 (name, value) 与线扫三参数 (name, type, value) 调用。"""
-        if value is not None:
-            return self._set_parameter_typed(parameter_name, parameter_type, value)
-        value = parameter_type
-        param_type = "FloatValue" if parameter_name in self._FLOAT_PARAM_NAMES else "FloatValue"
-        return self._set_parameter_typed(parameter_name, param_type, value)
-
-    def _set_parameter_typed(self, parameter_name, parameter_type, value):
-        if not self.b_open_device:
-            return 1, "Please Open Device First"
-        if parameter_type == "EnumValue":
-            ret = self.obj_cam.MV_CC_SetEnumValue(parameter_name, int(value))
+        attempt_count = 0
+        while(True):
+            ret =self.obj_cam.MV_CC_GetImageBuffer(self.st_frame_info, 1000)
             if ret != 0:
-                return ret, "set enum value fail! ret[0x%x]" % ret
-        elif parameter_type == "FloatValue":
-            ret = self.obj_cam.MV_CC_SetFloatValue(parameter_name, float(value))
-            if ret != 0:
-                return ret, "set float value fail! ret[0x%x]" % ret
-        elif parameter_type == "IntValue":
-            ret = self.obj_cam.MV_CC_SetIntValueEx(parameter_name, int(value))
-            if ret != 0:
-                return ret, "set int value fail! ret[0x%x]" % ret
-        elif parameter_type == "BoolValue":
-            ret = self.obj_cam.MV_CC_SetBoolValue(parameter_name, c_bool(value))
-            if ret != 0:
-                return ret, "set bool value fail! ret[0x%x]" % ret
-        elif parameter_type == "StringValue":
-            ret = self.obj_cam.MV_CC_SetStringValue(parameter_name, value)
-            if ret != 0:
-                return ret, "set string value fail! ret[0x%x]" % ret
-        return 0, "Success"
+                print("waiting for image buffer")
+                time.sleep(0.1)
+                attempt_count += 1
+                if attempt_count > 10:
+                    print("failed to get image buffer")
+                    return None
+                continue
+            opencv_image =self.frame_to_opencv_image(self.st_frame_info, self.st_frame_info.pBufAddr)
+            self.obj_cam.MV_CC_FreeImageBuffer(self.st_frame_info)
+            return opencv_image
 
     def Get_current_user_set(self):
         if not self.b_open_device:

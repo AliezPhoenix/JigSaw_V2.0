@@ -4,10 +4,7 @@ import time
 from ctypes import *
 from typing import Union
 from tools.MvImport.MvCameraControl_class import MvCamera
-from tools.MvImport.CameraParams_const import *
-from tools.MvImport.MvErrorDefine_const import *
 from tools.Camera import CameraController, LineScanCamera
-import cv2 as cv
 import modbus_tk.modbus_tcp as modbus_tcp
 import modbus_tk.defines as cst
 
@@ -71,84 +68,37 @@ class Hardware_Manager:
     def _camera_type(self, alias: str) -> str:
         return self._camera_types.get(alias, CAMERA_TYPE_AREA)
 
-    def _is_line(self, alias: str) -> bool:
-        return self._camera_type(alias) == CAMERA_TYPE_LINE
-
-    def _open_device(self, camera: CameraInstance, camera_type: str) -> tuple:
-        if camera_type == CAMERA_TYPE_LINE:
-            result = camera.Open_device()
-            if isinstance(result, tuple):
-                ret, msg = result
-                if ret != 0:
-                    return False, msg or f"开启相机失败，错误码: 0x{ret:08x}", ret
-                return True, None, ret
-            if result != MV_OK:
-                return False, f"开启相机失败，错误码: 0x{result:08x}", result
-            return True, None, result
-
-        nRet = camera.Open_device()
-        if nRet != MV_OK:
-            error_msg = f"开启相机失败，错误码: 0x{nRet:08x}"
-            if nRet == 0x80000206:
-                error_msg += " (网络错误，请检查port_ip和device_ip配置及网络连接)"
-            elif nRet == 0x80000221:
-                error_msg += " (IP冲突)"
-            elif nRet == 0x80000203:
-                error_msg += " (设备无访问权限)"
-            elif nRet == 0x80000204:
-                error_msg += " (设备忙或网络断开)"
-            return False, error_msg, nRet
-        return True, None, nRet
+    def _open_device(self, camera: CameraInstance) -> tuple:
+        ret, msg = camera.Open_device()
+        if ret != 0:
+            return False, msg or f"开启相机失败，错误码: 0x{ret:08x}", ret
+        return True, None, ret
 
     def _start_grabbing(self, camera: CameraInstance, camera_type: str) -> tuple:
+        # 线扫相机由调用方按需 Start/Stop，连接阶段无需持续取流
         if camera_type == CAMERA_TYPE_LINE:
-            result = camera.Start_grabbing()
-            if isinstance(result, tuple):
-                ret, msg = result
-                if ret != 0:
-                    return False, msg or f"开始取流失败，错误码: 0x{ret:08x}"
-                return True, None
             return True, None
-
-        camera.Start_grabbing()
+        ret, msg = camera.Start_grabbing()
+        if ret != 0:
+            return False, msg
         return True, None
 
-    def _stop_grabbing(self, camera: CameraInstance, camera_type: str) -> None:
+    def _stop_grabbing(self, camera: CameraInstance) -> None:
         if not camera.b_start_grabbing:
             return
-        if camera_type == CAMERA_TYPE_LINE:
-            result = camera.Stop_grabbing()
-            if isinstance(result, tuple):
-                ret, msg = result
-                if ret != 0:
-                    print(f"停止取流失败: {msg}")
-            return
-        camera.Stop_grabbing()
+        ret, msg = camera.Stop_grabbing()
+        if ret != 0:
+            print(f"停止取流失败: {msg}")
 
-    def _close_device(self, camera: CameraInstance, camera_type: str) -> None:
+    def _close_device(self, camera: CameraInstance) -> None:
         if not camera.b_open_device:
             return
-        if camera_type == CAMERA_TYPE_LINE:
-            result = camera.Close_device()
-            if isinstance(result, tuple):
-                ret, msg = result
-                if ret != 0:
-                    print(f"关闭设备失败: {msg}")
-            return
-        camera.Close_device()
+        ret, msg = camera.Close_device()
+        if ret != 0:
+            print(f"关闭设备失败: {msg}")
 
-    def _get_image(self, camera: CameraInstance, camera_type: str):
-        image = camera.Get_image()
-        if camera_type == CAMERA_TYPE_LINE:
-            if isinstance(image, tuple):
-                return None
-            return image
-
-        if image is None:
-            return None
-        if len(image.shape) == 3 and image.shape[2] == 3:
-            image = cv.cvtColor(image, cv.COLOR_RGB2BGR)
-        return image
+    def _get_image(self, camera: CameraInstance):
+        return camera.Get_image()
 
     def add_camera(self, hw_info: dict) -> tuple:
         """
@@ -207,13 +157,13 @@ class Hardware_Manager:
                 return False, f"关闭现有连接失败: {msg}", None
 
         try:
-            success, error_msg, _ = self._open_device(camera, camera_type)
+            success, error_msg, _ = self._open_device(camera)
             if not success:
                 return False, error_msg, None
 
             success, error_msg = self._start_grabbing(camera, camera_type)
             if not success:
-                self._close_device(camera, camera_type)
+                self._close_device(camera)
                 return False, error_msg, None
 
             return True, "相机连接成功", None
@@ -246,11 +196,10 @@ class Hardware_Manager:
             if alias not in self.hardware_dict:
                 return False, "相机不存在", None
             camera = self.hardware_dict[alias]
-            camera_type = self._camera_type(alias)
 
         try:
-            self._stop_grabbing(camera, camera_type)
-            self._close_device(camera, camera_type)
+            self._stop_grabbing(camera)
+            self._close_device(camera)
             return True, "相机关闭成功", None
         except Exception as e:
             return False, f"关闭异常: {str(e)}", None
@@ -302,19 +251,48 @@ class Hardware_Manager:
             if alias not in self.hardware_dict:
                 return False, "相机不存在", None
             camera = self.hardware_dict[alias]
-            camera_type = self._camera_type(alias)
-
-        if not camera.b_open_device or not camera.b_start_grabbing:
-            return False, "相机未连接或未开始取流", None
 
         try:
-            image = self._get_image(camera, camera_type)
+            image = self._get_image(camera)
             if image is None:
                 return False, "获取图像数据为空", None
             return True, "图像获取成功", image
         except Exception as e:
             return False, f"获取图像异常: {str(e)}", None
-    
+
+    def start_grabbing(self, alias: str) -> tuple:
+        """开始指定相机取流。"""
+        with self._lock:
+            if alias not in self.hardware_dict:
+                return False, "相机不存在", None
+            camera = self.hardware_dict[alias]
+
+        if not camera.b_open_device:
+            return False, "相机未连接", None
+
+        try:
+            ret, msg = camera.Start_grabbing()
+            if ret != 0:
+                return False, msg, None
+            return True, "开始取流成功", None
+        except Exception as e:
+            return False, f"开始取流异常: {str(e)}", None
+
+    def stop_grabbing(self, alias: str) -> tuple:
+        """停止指定相机取流。"""
+        with self._lock:
+            if alias not in self.hardware_dict:
+                return False, "相机不存在", None
+            camera = self.hardware_dict[alias]
+
+        try:
+            ret, msg = camera.Stop_grabbing()
+            if ret != 0:
+                return False, msg, None
+            return True, "停止取流成功", None
+        except Exception as e:
+            return False, f"停止取流异常: {str(e)}", None
+
     def get_parameter(self, alias: str, param_name: str) -> tuple:
         """
         获取指定相机的指定参数
@@ -365,7 +343,7 @@ class Hardware_Manager:
 
         try:
             ret, msg = camera.Set_parameter(param_name, value)
-            if ret != MV_OK:
+            if ret != 0:
                 return False, f"参数设置失败: {msg}", None
             return True, "参数设置成功", None
         except Exception as e:
@@ -436,9 +414,6 @@ class Hardware_Manager:
 
         if not camera.b_open_device:
             return False, "相机未连接", None
-
-        if not hasattr(camera, "Save_to_user_set"):
-            return False, "线扫相机不支持用户集保存", None
 
         try:
             ret, msg = camera.Save_to_user_set(user_set_index)

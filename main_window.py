@@ -66,7 +66,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "fulltray": None
         }
         self.CAM_LIST=[
-            {"alias": "dry_cam",        "camera_type": "Line", "device_index": 0},
+            {"alias": "dry_cam",        "camera_type": "Line", "device_index": 5},
             {"alias": "transfer_cam",   "port_ip": "192.168.1.201", "device_ip": "192.168.1.8"},
             {"alias": "sucker1_cam",          "port_ip": "192.168.1.202", "device_ip": "192.168.1.9"},
             {"alias": "sucker2_cam",          "port_ip": "192.168.1.203", "device_ip": "192.168.1.10"},
@@ -173,7 +173,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         tbl.setHorizontalHeaderLabels(["", "干燥台", "移栽台"])
         tbl.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
         # 固定行标签（第0行为表头行，第1-9行为数据行）
-        row_labels = ["总数：", "NG数：", "激光标记：", "尺寸：", "大小球(偏移)：", "缺球：", "划伤：", "偏移：", "良率："]
+        row_labels = ["总数：", "NG数：", "X Mark：", "尺寸：", "大小球(偏移)：", "缺球：", "划伤：", "偏移：", "良率："]
         for row, label in enumerate(row_labels):
             item = QTableWidgetItem(label)
             item.setFlags(item.flags() & ~Qt.ItemIsEditable)
@@ -782,9 +782,23 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 QMessageBox.warning(self, "错误", f"设置{hardware_alias}相机参数失败：{str(e)}")
 
         if action == "capture_one_frame":
-            success, msg, image = self.hardware_manager.capture_image(hardware_alias)
+            if hardware_alias == "dry_cam":
+                self.hardware_manager.start_grabbing(hardware_alias)
+                QMessageBox.information(self,"提示","正在拍照，请手动将干燥台X轴由拍照开始位移动至拍照结束位置...")
+                QApplication.processEvents()
+                try:
+                    success, msg, image = self.hardware_manager.capture_image(hardware_alias)
+                    image = cv.rotate(image,cv.ROTATE_90_CLOCKWISE)
+                finally:
+                    self.hardware_manager.stop_grabbing(hardware_alias)
+
+            else:
+                success, msg, image = self.hardware_manager.capture_image(hardware_alias)
+            
+            
             if not success:
                 QMessageBox.warning(self, "警告", f"拍照{hardware_alias}失败: {msg}")
+                return
             else:
                 prefix = hardware_alias.split("_")[0]
                 image_bgr = ensure_bgr_u8(image, copy=True)

@@ -456,6 +456,9 @@
                <property name="styleSheet">
                 <string notr="true">border: 1px solid gray; background-color: #2b2b2b;</string>
                </property>
+               <property name="alignment">
+                <set>Qt::AlignCenter</set>
+               </property>
                <property name="text">
                 <string>干燥台图像</string>
                </property>
@@ -565,7 +568,7 @@
                 <item row="2" column="1">
                  <widget class="QLabel" name="label_8">
                   <property name="text">
-                   <string>激光标记</string>
+                   <string>X Mark</string>
                   </property>
                  </widget>
                 </item>

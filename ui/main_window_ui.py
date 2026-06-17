@@ -250,6 +250,7 @@ class Ui_MainWindow(object):
         self.label_image_show_dry.setSizePolicy(sizePolicy)
         self.label_image_show_dry.setMaximumSize(QtCore.QSize(99999, 99999))
         self.label_image_show_dry.setStyleSheet("border: 1px solid gray; background-color: #2b2b2b;")
+        self.label_image_show_dry.setAlignment(QtCore.Qt.AlignCenter)
         self.label_image_show_dry.setScaledContents(False)
         self.label_image_show_dry.setObjectName("label_image_show_dry")
         self.gridLayout_5.addWidget(self.label_image_show_dry, 1, 1, 4, 2)
@@ -1906,7 +1907,7 @@ class Ui_MainWindow(object):
         self.label_17.setText(_translate("MainWindow", "划伤"))
         self.label_28.setText(_translate("MainWindow", "缺球(额外球)"))
         self.label_9.setText(_translate("MainWindow", "切偏"))
-        self.label_8.setText(_translate("MainWindow", "激光标记"))
+        self.label_8.setText(_translate("MainWindow", "X Mark"))
         self.label_19.setText(_translate("MainWindow", "球大小(偏移)"))
         self.label_29.setText(_translate("MainWindow", "空"))
         self.label_23.setText(_translate("MainWindow", "尺寸"))
@@ -2043,6 +2044,37 @@ class Ui_MainWindow(object):
         self.actionManual_Control.setText(_translate("MainWindow", "Manual Control"))
         self.actionSettings.setText(_translate("MainWindow", "Settings"))
         self.actionDebug.setText(_translate("MainWindow", "Debug"))
-from ui.tabwidget import TabWidget
 from widgets.zoomable_graphics_view import ZoomableGraphicsView
+class WestTabBar(QtWidgets.QTabBar):
+    """West 位置专用 TabBar：tabSizeHint 是唯一有效控制 tab 尺寸的方式（样式表 min-width/min-height 无效）"""
 
+    # West 下：width=条厚度(水平)，height=每 tab 高度(垂直)。仅修改此处即可调整尺寸。
+    BAR_THICKNESS = 130   # 条厚度，容纳「干燥台参数」等 5 字
+    TAB_HEIGHT = 80      # 每 tab 高度
+
+    def paintEvent(self, event):
+        painter = QtWidgets.QStylePainter(self)
+        try:
+            option = QtWidgets.QStyleOptionTab()
+            for index in range(self.count()):
+                self.initStyleOption(option, index)
+                painter.drawControl(QtWidgets.QStyle.CE_TabBarTabShape, option)
+                painter.drawText(self.tabRect(index),
+                                QtCore.Qt.AlignCenter | QtCore.Qt.TextDontClip,
+                                self.tabText(index))
+        finally:
+            painter.end()
+
+    def tabSizeHint(self, index):
+        # West 位置：width=条厚度(水平)，height=每 tab 高度(垂直)
+        return QtCore.QSize(self.BAR_THICKNESS, self.TAB_HEIGHT)
+
+
+class TabWidget(QtWidgets.QTabWidget):
+    def __init__(self, parent=None):
+        QtWidgets.QTabWidget.__init__(self, parent)
+        bar = WestTabBar()
+        self.setTabBar(bar)
+        # 直接设置 TabBar 最小宽度，确保条厚度生效（West 下 TabBar 的 width=条厚度）
+        bar.setMinimumWidth(WestTabBar.BAR_THICKNESS)
+        bar.setMinimumHeight(WestTabBar.TAB_HEIGHT)

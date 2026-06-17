@@ -44,8 +44,10 @@ def check_sys_and_update_dll():
         MvCamCtrldllPath = "MvCameraControl.dll"
         if "winmode" in ctypes.WinDLL.__init__.__code__.co_varnames:
             MvCamCtrldll = WinDLL(MvCamCtrldllPath, winmode=0)
+            print("MvCamCtrldllPath: ", MvCamCtrldllPath)
         else:
             MvCamCtrldll = WinDLL(MvCamCtrldllPath)
+            print("MvCamCtrldllPath: ", MvCamCtrldllPath)
     else:
         architecture = platform.machine()
         if architecture == 'aarch64':
