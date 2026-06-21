@@ -1,5 +1,6 @@
 from . import *
 from src.support.support_funs import ensure_gray_u8
+from src.support.data_structure import Size_Result
 
 
 # ==================== 辅助函数 ====================
@@ -208,8 +209,10 @@ class SizeDetector:
         
         # 验证边界合理性：确保边界顺序正确且尺寸合理
         if right_boundary <= left_boundary or bottom_boundary <= top_boundary:
-            self.detection_result = False, "尺寸边界无效", {'is_valid': False, 'box_points': [0.0, 0.0, 0.0, 0.0], 'width': 0.0, 'height': 0.0}
-            return
+            self.detection_result = Size_Result(
+                error_code=2, error_msg="尺寸边界无效", is_valid=False
+            )
+            return self.detection_result
         
         width_pixel = right_boundary - left_boundary
         height_pixel = bottom_boundary - top_boundary
@@ -248,13 +251,13 @@ class SizeDetector:
                 is_valid = True
         
         # 保存检测结果
-        detection_result = True, "尺寸检测完成", {
-            'is_valid': is_valid,
-            'box_points': box_points,
-            'width': product_width_mm,
-            'height': product_height_mm
-        }
-            
+        detection_result = Size_Result(
+            width=product_width_mm,
+            height=product_height_mm,
+            box_points=[float(v) for v in box_points],
+            is_valid=is_valid,
+        )
+        self.detection_result = detection_result
 
         return detection_result
 

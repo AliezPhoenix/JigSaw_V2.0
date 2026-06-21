@@ -271,7 +271,7 @@ class TransferThread(QThread):
         """strip 完成：寄存器 → 日志 → 发送完成。"""
         
         log_info = self.bga_strip.get_log_info()
-        send_data = self.bga_strip.full_value.copy()
+        send_data = self.bga_strip.get_status_array().copy()
         self._write_modbus_registers(send_data, mode, side=self.current_side)
         self.write_log_to_file(log_info)
         time.sleep(0.05)
@@ -457,33 +457,35 @@ class TransferThread(QThread):
                         product_image = image[
                             y : y + template_height, x : x + template_width
                         ]
-                        success, msg, product_info = self._detect_product(
+                        success, msg, product = self._detect_product(
                             x, y, product_image
                         )
                         if not success:
                             filepath_result = self._generate_image_filename("ERROR")
                             filepath_ori = self._generate_image_filename("ORI")
                             self._async_save_image(
-                                product_info["product_image_result"], filepath_result
+                                product.product_image_result, filepath_result
                             )
                             self._async_save_image(product_image, filepath_ori)
-                        if "OK" not in product_info["defect_type"]:
-                            dts = product_info["defect_type"]
+                        if "OK" not in product.defect_type:
+                            dts = product.defect_type
                             defect_type = dts[0] if dts else "UNKNOWN"
                             filepath_result = self._generate_image_filename(defect_type)
                             filepath_ori = self._generate_image_filename("ORI")
                             self._async_save_image(
-                                product_info["product_image_result"], filepath_result
+                                product.product_image_result, filepath_result
                             )
                             self._async_save_image(product_image, filepath_ori)
-                        slot[gr][gcol] = product_info
+                        slot[gr][gcol] = product
                         shot_centers.append((x + template_width // 2, y + template_height // 2))
-                        image_result[y : y + template_height, x : x + template_width] = product_info["product_image_result"]
+                        image_result[y : y + template_height, x : x + template_width] = product.product_image_result
                         image_result = cv.rectangle(image_result, (x, y), (x + template_width, y + template_height), (0, 255, 255), 4)
                 #——————————————————更新显示和统计信息——————————————————————————————————————————————————————
 
                 self._update_image_signal.emit(image_result, self.bga_strip)
-                self.bga_strip.write(slot, image)
+                posinfo = self.bga_strip.pop_next_position()
+                if posinfo is not None:
+                    self.bga_strip.write(posinfo[0], posinfo[1], slot, image)
                 stats_info = self.bga_strip.get_statistics_info()
                 dc = (stats_info or {}).get("defect_counts") or {}
                 ng_s = ",".join(f"{k}:{v}" for k, v in sorted(dc.items()) if v) or "无"
@@ -638,7 +640,7 @@ class TransferThread(QThread):
         }
         
         # 调用通用检测函数（提前返回模式）
-        success, msg, product_info = execute_product_detection(
+        success, msg, product = execute_product_detection(
             image=product_image,
             detectors=detectors,
             params=params,
@@ -647,23 +649,23 @@ class TransferThread(QThread):
             error_callback=None  # 不显示对话框，返回错误信息
         )
         
-        # 添加位置信息
-        product_info["x"] = x
-        product_info["y"] = y
+        # 添加位置信息与原图裁剪（用于单格交互显示）
+        product.product_position = [x, y, product_image.shape[1], product_image.shape[0]]
+        product.product_image = product_image.copy()
         
         # 如果检测失败，直接返回
         if not success:
-            return False, msg, product_info
+            return False, msg, product
         
         # 绘制检测结果
-        product_info["product_image_result"] = self.draw_detection_results(product_image, product_info)
+        product.product_image_result = self.draw_detection_results(product_image, product)
         
-        return True, "成功", product_info
+        return True, "成功", product
 
     #——————————————————————————————绘制检测结果函数————————————————————————————————————————————————————————————————————
-    def draw_detection_results(self,image_result:np.ndarray,product_info:dict):
+    def draw_detection_results(self,image_result:np.ndarray,product):
         """调用通用绘制方法"""
-        success, msg, result_image = draw_detection_results(image_result, product_info, mark_color="green")
+        success, msg, result_image = draw_detection_results(image_result, product, mark_color="green")
         if msg:
             self._update_message_signal.emit(msg)
         return result_image

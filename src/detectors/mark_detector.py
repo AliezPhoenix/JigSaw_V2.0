@@ -1,5 +1,6 @@
 from . import *
 from src.support.support_funs import ensure_gray_u8
+from src.support.data_structure import Mark_Result
 
 
 # ==================== MarkDetector 类 ====================
@@ -173,32 +174,22 @@ class MarkDetector:
         areas = self.params.get("mark_roi_min_areas") or []
 
         if not mark_rois:
-            return True, "未配置Mark ROI", {
-                "is_valid": False,
-                "per_roi": [],
-                "mark_contour": None,
-                "mark_area": 0.0,
-                "mark_area_mm": 0.0,
-            }
+            return Mark_Result(is_valid=False)
 
         if len(mark_rois) != len(areas):
-            return False, "Mark 参数长度不一致：mark_rois 与 mark_roi_min_areas 数量需相同", {
-                "is_valid": False,
-                "per_roi": [],
-                "mark_contour": None,
-                "mark_area": 0.0,
-                "mark_area_mm": 0.0,
-            }
+            return Mark_Result(
+                error_code=2,
+                error_msg="Mark 参数长度不一致：mark_rois 与 mark_roi_min_areas 数量需相同",
+                is_valid=False,
+            )
 
         for i, a in enumerate(areas):
             if not isinstance(a, int) or a < 0:
-                return False, f"无效的 Mark ROI 最小面积（索引 {i}）", {
-                    "is_valid": False,
-                    "per_roi": [],
-                    "mark_contour": None,
-                    "mark_area": 0.0,
-                    "mark_area_mm": 0.0,
-                }
+                return Mark_Result(
+                    error_code=2,
+                    error_msg=f"无效的 Mark ROI 最小面积（索引 {i}）",
+                    is_valid=False,
+                )
 
         per_roi = []
         for i, roi_rect in enumerate(mark_rois):
@@ -225,24 +216,14 @@ class MarkDetector:
             for entry in per_roi
             if entry.get("mark_contour") is not None
         ]
-        if not contours_draw:
-            mark_contour_out = None
-        elif len(contours_draw) == 1:
-            mark_contour_out = contours_draw[0]
-        else:
-            mark_contour_out = contours_draw
 
-        total_area = sum(entry.get("mark_area", 0.0) for entry in per_roi)
-        total_mm = sum(entry.get("mark_area_mm", 0.0) for entry in per_roi)
-
-        msg = "检测到Mark" if is_valid else "未检测到Mark"
-        return True, msg, {
-            "is_valid": is_valid,
-            "per_roi": per_roi,
-            "mark_contour": mark_contour_out,
-            "mark_area": float(total_area),
-            "mark_area_mm": float(total_mm),
-        }
+        return Mark_Result(
+            mark_contour=contours_draw,
+            mark_count=len(contours_draw),
+            mark_position=[],
+            mark_area=[float(entry.get("mark_area", 0.0)) for entry in per_roi],
+            is_valid=is_valid,
+        )
 
     def update_params(self, params: dict):
         """更新检测器参数（仅接受已知键；支持 mark_rois / allow_mark / mark_roi_min_areas）。"""

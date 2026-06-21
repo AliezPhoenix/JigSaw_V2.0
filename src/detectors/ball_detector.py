@@ -1,5 +1,6 @@
 from . import *
 from src.support.support_funs import ensure_gray_u8
+from src.support.data_structure import Ball_Result
 
 
 # ==================== BallDetector 类 ====================
@@ -58,7 +59,7 @@ class BallDetector:
         
         # 验证参数
         if len(ball_search_roi) < 4:
-            return False, "锡球搜索区域无效", {'is_valid': False, 'ball_count': 0, 'ok_details': [], 'ng_details': [], 'avg_radius': 0.0}
+            return Ball_Result(error_code=2, error_msg="锡球搜索区域无效", is_valid=False)
         
         # 将mm单位转换为像素单位
         ball_radius_tolerance_pixel = ball_radius_tolerance_mm / pixel_size if pixel_size > 0 else 0.0
@@ -149,6 +150,7 @@ class BallDetector:
             # 创建详细信息字典（先不包含avg_radius_mm）
             ball_detail = {
                 "box": box,  # (x, y, w, h)
+                "contour": contour,
                 "center": (int(center_x), int(center_y)),
                 "radius_pixel": float(radius),
                 "radius_mm": radius_mm,
@@ -198,14 +200,40 @@ class BallDetector:
             # 有不合格的球
             is_valid = False
         
-        # 返回结果
-        return True, "锡球检测完成", {
-            'is_valid': is_valid,
-            'ball_count': contour_count,
-            'ok_details': ok_details, 
-            'ng_details': ng_details,
-            'avg_radius': float(avg_radius)
-        } 
+        # 平均面积（mm）
+        avg_area_mm = avg_area * pixel_size * pixel_size
+
+        # 产品中心（所有球中心均值）
+        all_centers = [d["center"] for d in ok_details] + [d["center"] for d in ng_details]
+        if all_centers:
+            center_arr = np.array(all_centers, dtype=float)
+            product_center = (float(center_arr[:, 0].mean()), float(center_arr[:, 1].mean()))
+        else:
+            product_center = (0.0, 0.0)
+
+        # 返回结果数据类
+        return Ball_Result(
+            ball_contour=[d["contour"] for d in ok_details],
+            product_center_based_on_balls=product_center,
+            ball_position=[d["center"] for d in ok_details],
+            ball_count=contour_count,
+            ball_area=[d["area_pixel"] for d in ok_details],
+            ball_area_mm=[d["area_mm"] for d in ok_details],
+            ball_radius=[d["radius_pixel"] for d in ok_details],
+            ball_radius_mm=[d["radius_mm"] for d in ok_details],
+            ball_average_area=float(avg_area),
+            ball_average_area_mm=float(avg_area_mm),
+            ball_average_radius=float(avg_radius),
+            ball_average_radius_mm=float(avg_radius_mm),
+            ng_ball_contour=[d["contour"] for d in ng_details],
+            ng_ball_position=[d["center"] for d in ng_details],
+            ng_ball_count=len(ng_details),
+            ng_ball_area=[d["area_pixel"] for d in ng_details],
+            ng_ball_area_mm=[d["area_mm"] for d in ng_details],
+            ng_ball_radius=[d["radius_pixel"] for d in ng_details],
+            ng_ball_radius_mm=[d["radius_mm"] for d in ng_details],
+            is_valid=is_valid,
+        )
     
     def update_params(self, params: dict):
         """

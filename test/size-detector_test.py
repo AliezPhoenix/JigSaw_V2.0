@@ -395,9 +395,7 @@ detect_params = {
     "allow_tolerance_y":0.07,
     "std_size":(10.0, 15.0)
 }
-product_info = {
-    "size_result":()
-}
+# 检测结果在循环内封装为 data_structure.Product
 
 Size_D.update_params(detect_params)
 
@@ -456,16 +454,16 @@ def run_threshold_debug_ui(detector, image_path: str):
         image_binary = cv.inRange(gray_image, min_threshold, max_threshold)
 
         size_detect_result = detector.detect(image_ori.copy())
-        product_info["size_result"] = size_detect_result
+        product = support_funs.data_structure.Product()
+        product.size_result = size_detect_result
 
         ret, msg, result_img = support_funs.draw_detection_results(
             image_result=image_ori.copy(),
-            product_info=product_info,
+            product=product,
         )
-        result_data = size_detect_result[2] if size_detect_result and len(size_detect_result) > 2 else {}
-        width_mm = float(result_data.get("width", 0.0))
-        height_mm = float(result_data.get("height", 0.0))
-        is_valid = bool(result_data.get("is_valid", False))
+        width_mm = float(size_detect_result.width or 0.0)
+        height_mm = float(size_detect_result.height or 0.0)
+        is_valid = bool(size_detect_result.is_valid)
         status_text = "OK" if is_valid else "NG"
         status_color = (0, 255, 0) if is_valid else (0, 0, 255)
 

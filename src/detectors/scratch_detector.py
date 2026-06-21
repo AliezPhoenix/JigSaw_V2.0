@@ -1,5 +1,6 @@
 from . import *
 from src.support.support_funs import mask_roi_regions, ensure_gray_u8
+from src.support.data_structure import Scratch_Result
 
 
 class ScratchDetector:
@@ -66,10 +67,7 @@ class ScratchDetector:
             
             # 检查是否有划痕检测区域
             if not isinstance(scratch_roi, list) or len(scratch_roi) == 0:
-                return True, "未配置划痕检测区域", {
-                    'is_valid': True,
-                    'ng_scratch_contours': []
-                }
+                return Scratch_Result(is_valid=True)
             
             # 存储检测到的NG划痕轮廓
             ng_scratch_contours = []
@@ -136,23 +134,19 @@ class ScratchDetector:
             
             # 判断结果
             is_valid = len(ng_scratch_contours) == 0
-            
-            if is_valid:
-                return True, "未检测到划痕缺陷", {
-                    'is_valid': True,
-                    'ng_scratch_contours': []
-                }
-            else:
-                return True, f"检测到 {len(ng_scratch_contours)} 个划痕缺陷", {
-                    'is_valid': False,
-                    'ng_scratch_contours': ng_scratch_contours
-                }
-            
+            total_area = float(sum(cv.contourArea(c) for c in ng_scratch_contours))
+            return Scratch_Result(
+                scratch_contour=ng_scratch_contours,
+                scratch_count=len(ng_scratch_contours),
+                scratch_area=total_area,
+                scratch_area_mm=total_area * pixel_size * pixel_size,
+                is_valid=is_valid,
+            )
+
         except Exception as e:
-            return False, f"划痕检测异常: {str(e)}", {
-                'is_valid': False,
-                'ng_scratch_contours': []
-            }
+            return Scratch_Result(
+                error_code=2, error_msg=f"划痕检测异常: {str(e)}", is_valid=False
+            )
     
     def update_params(self, params: dict):
         """

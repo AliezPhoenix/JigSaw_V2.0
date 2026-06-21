@@ -8,7 +8,8 @@ from PyQt5.QtCore import Qt, QRect, pyqtSignal, QPoint
 from PyQt5.QtGui import QPainter, QPixmap, QImage
 import cv2 as cv
 
-from src.support.support_funs import Bga_Strip, get_bga_animation_grid_layout
+from src.support.support_funs import get_bga_animation_grid_layout
+from src.support.bga_strip import BGA_STRIP
 
 
 class InteractiveBgaLabel(QLabel):
@@ -78,12 +79,12 @@ class InteractiveBgaLabel(QLabel):
 
         return (scale, scale, display_rect)
 
-    def set_bga_data(self, bga_strip_log_instance: 'Bga_Strip'):
+    def set_bga_data(self, bga_strip_log_instance: 'BGA_STRIP'):
         """
         设置BGA数据并初始化显示
 
         参数:
-            bga_strip_log_instance: bga_strip_log类的实例
+            bga_strip_log_instance: BGA_STRIP 类的实例
         """
         self.bga = bga_strip_log_instance
 
@@ -116,11 +117,12 @@ class InteractiveBgaLabel(QLabel):
             self.update()
 
     def _calculate_regions(self):
-        """计算所有区域在图像中的像素坐标"""
+        """计算所有单格区域在图像中的像素坐标（每个 product 格一个可交互区域）"""
         self.regions = []
 
         # 根据整体图像比例计算方块尺寸（与get_full_animation保持一致）
-        h, w = self.bga.full_value.shape
+        status = self.bga.get_status_array()
+        h, w = status.shape
         margin, block_h, block_w, _, _ = get_bga_animation_grid_layout(
             h, w, margin=self.margin, canvas_h=480, canvas_w=150
         )
@@ -128,24 +130,23 @@ class InteractiveBgaLabel(QLabel):
         self.block_height = block_h
         self.block_width = block_w
 
-        for pos in self.bga.position_list:
-            row_start, col_start, row_end, col_end, \
-            actual_row_end, actual_col_end, \
-            source_row_size, source_col_size = pos
+        # 仅对非空白格（合法 product 位置，状态码 != 0）生成可交互单格区域
+        for row in range(h):
+            for col in range(w):
+                if int(status[row, col]) == 0:
+                    continue
+                x_start = self.margin + col * (self.block_width + self.margin)
+                y_start = self.margin + row * (self.block_height + self.margin)
+                x_end = x_start + self.block_width
+                y_end = y_start + self.block_height
 
-            # 计算区域在图像中的像素坐标
-            x_start = self.margin + col_start * (self.block_width + self.margin)
-            y_start = self.margin + row_start * (self.block_height + self.margin)
-            x_end = self.margin + actual_col_end * (self.block_width + self.margin)
-            y_end = self.margin + actual_row_end * (self.block_height + self.margin)
-
-            self.regions.append({
-                'pos_start': (row_start, col_start),
-                'x_start': x_start,
-                'y_start': y_start,
-                'x_end': x_end,
-                'y_end': y_end
-            })
+                self.regions.append({
+                    'pos_start': (row, col),
+                    'x_start': x_start,
+                    'y_start': y_start,
+                    'x_end': x_end,
+                    'y_end': y_end
+                })
 
     def _label_to_image_coords(self, label_point):
         """
@@ -262,7 +263,7 @@ class InteractiveBgaLabel(QLabel):
         clicked_region = self._find_region_at_point(image_point)
         if clicked_region is not None:
             pos_start = clicked_region['pos_start']
-            print(f"点击区域 - pos起始位置: (row={pos_start[0]}, col={pos_start[1]})")
+            print(f"点击单格 - product 位置: (row={pos_start[0]}, col={pos_start[1]})")
             self.regionClicked.emit(pos_start)
         else:
             print("点击位置不在任何区域内")

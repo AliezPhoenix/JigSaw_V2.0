@@ -1,4 +1,5 @@
 from . import *
+from src.support.data_structure import Ball_Result, Shift_Result, Size_Result
 
 
 # ==================== ShiftDetector 类 ====================
@@ -24,7 +25,7 @@ class ShiftDetector:
         if params:
             self.params.update(params)
         
-    def detect(self, ball_detection_result: dict, size_detection_result: dict):
+    def detect(self, ball_detection_result: Ball_Result, size_detection_result: Size_Result):
         """
         执行 Shift 偏移检测
         
@@ -58,24 +59,13 @@ class ShiftDetector:
             allow_tolerance_x = self.params.get('allow_tolerance_x', 0.0)
             allow_tolerance_y = self.params.get('allow_tolerance_y', 0.0)
                         
-            # 从 BallDetector 结果中提取所有球的中心点
+            # 从 BallDetector 结果中提取所有球的中心点（合格 + 不合格）
             ball_centers = []
-            
-            # 从合格球中提取中心
-            ok_details = ball_detection_result.get('ok_details', [])
-            for detail in ok_details:
-                center = detail['center']
+            for center in list(ball_detection_result.ball_position) + list(ball_detection_result.ng_ball_position):
                 ball_centers.append((float(center[0]), float(center[1])))
-            
-            # 从不合格球中提取中心
-            ng_details = ball_detection_result.get('ng_details', [])
-            for detail in ng_details:
-                center = detail['center']
-                ball_centers.append((float(center[0]), float(center[1])))
-            
 
             # 从 SizeDetector 结果中提取尺寸中心
-            box_points = size_detection_result.get('box_points', None)
+            box_points = size_detection_result.box_points
 
             # 从 [x, y, w, h] 格式计算尺寸中心
             if box_points is None or len(box_points) < 4:
@@ -107,31 +97,21 @@ class ShiftDetector:
             shift_x = shift_x_pixel * pixel_size * error_correction_factor
             shift_y = shift_y_pixel * pixel_size * error_correction_factor
             
-            # 构建结果字典，包含中心点信息用于绘制
-            result_dict = {
-                'is_valid': False,
-                'shift_x': shift_x,
-                'shift_y': shift_y,
-                'ball_center': (ball_center_x, ball_center_y),
-                'size_center': (size_center_x, size_center_y)
-            }
-            
-            if abs(shift_x) > allow_tolerance_x or abs(shift_y) > allow_tolerance_y:
-                result_dict['is_valid'] = False
-                return True, "NG", result_dict
+            is_valid = not (abs(shift_x) > allow_tolerance_x or abs(shift_y) > allow_tolerance_y)
+            return Shift_Result(
+                shift_x=shift_x,
+                shift_y=shift_y,
+                shift_x_mm=shift_x,
+                shift_y_mm=shift_y,
+                ball_center=(ball_center_x, ball_center_y),
+                size_center=(size_center_x, size_center_y),
+                is_valid=is_valid,
+            )
 
-            result_dict['is_valid'] = True
-            return True, "OK", result_dict
-            
         except Exception as e:
-            # 返回tuple格式以保持一致性：(success, msg, result_dict)
-            return False, f"偏移检测异常: {str(e)}", {
-                'is_valid': False,
-                'shift_x': 0.0,
-                'shift_y': 0.0,
-                'ball_center': (0.0, 0.0),
-                'size_center': (0.0, 0.0)
-            }
+            return Shift_Result(
+                error_code=2, error_msg=f"偏移检测异常: {str(e)}", is_valid=False
+            )
     
     def update_params(self, params: dict):
         """

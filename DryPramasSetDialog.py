@@ -310,31 +310,31 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         
         self.processed_image_label.setPixmap(scaled_pixmap)
     
-    def _draw_detection_results(self, image_result:np.ndarray, product_info:dict):
+    def _draw_detection_results(self, image_result:np.ndarray, product):
         """在图像上绘制检测结果（调用通用方法）
         
         Args:
             image_result: 结果图像（BGR格式或灰度图）
-            product_info: 产品信息字典，包含检测结果元组
+            product: data_structure.Product 实例
         
         Returns:
             np.ndarray: 绘制后的图像
         """
-        success, msg, result_image = draw_detection_results(image_result, product_info, mark_color="red")
+        success, msg, result_image = draw_detection_results(image_result, product, mark_color="red")
         if msg:
             print(msg)
         return result_image
     
-    def _generate_result_text(self, product_info):
-        """生成检测结果文本
+    def _generate_result_text(self, product):
+        """生成检测结果文本（消费 data_structure.Product）
         
         Args:
-            product_info: 产品信息字典，包含检测结果
+            product: data_structure.Product 实例
         
         Returns:
             str: 格式化的结果文本
         """
-        defect_type_list = product_info.get("defect_type", ["OK"])
+        defect_type_list = product.defect_type or ["OK"]
         roi_block = self.local_params.get("roi_block", [])
         pixel_size = self.local_params.get("pixel_size", 0.001)
         
@@ -355,165 +355,94 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         result_text += f"当前屏蔽区域数量: {len(roi_block)}\n\n"
         
         # Mark检测结果
-        if should_detect_mark and product_info.get("mark_result") is not None:
-            try:
-                mark_result = product_info["mark_result"]
-                if isinstance(mark_result, tuple) and len(mark_result) >= 3:
-                    result_dict = mark_result[2]
-                    is_valid = result_dict.get("is_valid", False)
-                    allow_mark = self.local_params.get("allow_mark", False)
-                    result_text += f"【Mark检测】\n"
-                    per_roi = result_dict.get("per_roi") or []
-                    if per_roi:
-                        result_text += f"聚合({'AND' if allow_mark else 'OR'}) is_valid={is_valid}\n"
-                        for pr in per_roi:
-                            iv = pr.get("is_valid", False)
-                            idx = pr.get("index", 0) + 1
-                            a = float(pr.get("mark_area", 0.0))
-                            amm = float(
-                                pr.get("mark_area_mm", a * pixel_size * pixel_size)
-                            )
-                            st = "有Mark" if iv else "无Mark"
-                            result_text += f"  ROI{idx}: {st}, 面积 {a:.1f}像素² ({amm:.2f}mm²)\n"
-                    else:
-                        mark_area = result_dict.get("mark_area", 0.0)
-                        mark_area_mm = result_dict.get(
-                            "mark_area_mm", mark_area * pixel_size * pixel_size
-                        )
-                        if mark_area > 0:
-                            result_text += f"Mark面积: {mark_area:.1f}像素² ({mark_area_mm:.2f}mm²)\n"
-                        else:
-                            result_text += f"Mark面积: 未检测到\n"
-                    if allow_mark:
-                        result_text += f"判定: {'OK (Mark齐全)' if is_valid else 'NG (Mark不全)'}\n"
-                    else:
-                        result_text += f"判定: {'NG (检测到Mark)' if is_valid else 'OK (未检测到Mark)'}\n"
-                    result_text += "\n"
-            except Exception as e:
-                result_text += f"【Mark检测】\n"
-                result_text += f"错误: {str(e)}\n\n"
+        if should_detect_mark:
+            mark = product.mark_result
+            allow_mark = self.local_params.get("allow_mark", False)
+            result_text += f"【Mark检测】\n"
+            areas = mark.mark_area or []
+            if any(a > 0 for a in areas):
+                for i, a in enumerate(areas, 1):
+                    amm = a * pixel_size * pixel_size
+                    result_text += f"  ROI{i}: 面积 {a:.1f}像素² ({amm:.2f}mm²)\n"
+            else:
+                result_text += f"Mark面积: 未检测到\n"
+            if allow_mark:
+                result_text += f"判定: {'OK (Mark齐全)' if mark.is_valid else 'NG (Mark不全)'}\n"
+            else:
+                result_text += f"判定: {'NG (检测到Mark)' if mark.is_valid else 'OK (未检测到Mark)'}\n"
+            result_text += "\n"
         
         # 尺寸检测结果
-        if should_detect_size and product_info.get("size_result") is not None:
-            try:
-                size_result = product_info["size_result"]
-                if isinstance(size_result, tuple) and len(size_result) >= 3:
-                    result_dict = size_result[2]
-                    width = result_dict.get("width", None)
-                    height = result_dict.get("height", None)
-                    is_valid = result_dict.get("is_valid", False)
-                    
-                    result_text += f"【尺寸检测】\n"
-                    result_text += f"判定: {'OK' if is_valid else 'NG'}\n"
-                    if width is not None and height is not None:
-                        result_text += f"产品尺寸: 宽 {width:.4f}mm × 高 {height:.4f}mm\n"
-                    else:
-                        result_text += f"产品尺寸: 检测失败\n"
-                    result_text += "\n"
-            except Exception as e:
-                result_text += f"【尺寸检测】\n"
-                result_text += f"错误: {str(e)}\n\n"
+        if should_detect_size:
+            size = product.size_result
+            result_text += f"【尺寸检测】\n"
+            result_text += f"判定: {'OK' if size.is_valid else 'NG'}\n"
+            if size.width and size.height:
+                result_text += f"产品尺寸: 宽 {size.width:.4f}mm × 高 {size.height:.4f}mm\n"
+            else:
+                result_text += f"产品尺寸: 检测失败\n"
+            result_text += "\n"
         
         # 锡球检测结果
-        if should_detect_ball and product_info.get("ball_result") is not None:
-            try:
-                ball_result = product_info["ball_result"]
-                if isinstance(ball_result, tuple) and len(ball_result) >= 3:
-                    result_dict = ball_result[2]
-                    ball_count = result_dict.get("ball_count", 0)
-                    avg_radius = result_dict.get("avg_radius", 0.0)
-                    avg_radius_mm = result_dict.get("avg_radius_mm", avg_radius * pixel_size)
-                    ok_details = result_dict.get("ok_details", [])
-                    ng_details = result_dict.get("ng_details", [])
-                    is_valid = result_dict.get("is_valid", False)
-                    
-                    result_text += f"【锡球检测】\n"
-                    result_text += f"判定: {'OK' if is_valid else 'NG'}\n"
-                    result_text += f"锡球总数: {ball_count}\n"
-                    expected_count = self.local_params.get("ball_count", 0)
-                    if expected_count > 0:
-                        result_text += f"期望数量: {expected_count}\n"
-                    if avg_radius_mm > 0:
-                        result_text += f"平均半径: {avg_radius_mm:.2f}mm\n"
-                    result_text += "\n"
-                    
-                    if ok_details:
-                        result_text += f"合格锡球 ({len(ok_details)}颗):\n"
-                        for i, detail in enumerate(ok_details, 1):
-                            radius_mm = detail.get("radius_mm", detail.get("radius", 0.0) * pixel_size)
-                            area_mm2 = detail.get("area_mm2", detail.get("area", 0.0) * pixel_size * pixel_size)
-                            center = detail.get("center", (0, 0))
-                            result_text += f"  锡球{i}: 半径={radius_mm:.2f}mm, "
-                            result_text += f"面积={area_mm2:.2f}mm², "
-                            result_text += f"中心=({center[0]}, {center[1]})\n"
-                        result_text += "\n"
-                    
-                    if ng_details:
-                        result_text += f"不合格锡球 ({len(ng_details)}颗):\n"
-                        for i, detail in enumerate(ng_details, 1):
-                            radius_mm = detail.get("radius_mm", detail.get("radius", 0.0) * pixel_size)
-                            area_mm2 = detail.get("area_mm2", detail.get("area", 0.0) * pixel_size * pixel_size)
-                            radius_diff_mm = detail.get("radius_diff_mm", 0.0)
-                            center = detail.get("center", (0, 0))
-                            result_text += f"  锡球{i}: 半径={radius_mm:.2f}mm, "
-                            result_text += f"面积={area_mm2:.2f}mm², "
-                            if radius_diff_mm > 0:
-                                result_text += f"半径偏差={radius_diff_mm:.2f}mm, "
-                            result_text += f"中心=({center[0]}, {center[1]})\n"
-                        result_text += "\n"
-                    
-                    # 偏移检测结果（与锡球检测一起显示）
-                    if should_detect_shift and product_info.get("shift_result") is not None:
-                        try:
-                            shift_result = product_info["shift_result"]
-                            shift_dict = shift_result[2]
-                            shift_x = shift_dict.get("shift_x", 0.0)
-                            shift_y = shift_dict.get("shift_y", 0.0)
-                            ball_center = shift_dict.get("ball_center", None)
-                            size_center = shift_dict.get("size_center", None)
-                            is_valid_shift = shift_dict.get("is_valid", False)
-                            
-                            shift_x_tolerance = self.local_params.get("shift_x_tolerance", 0.1)
-                            shift_y_tolerance = self.local_params.get("shift_y_tolerance", 0.1)
-                            
-                            result_text += f"【偏移检测】\n"
-                            result_text += f"判定: {'OK' if is_valid_shift else 'NG'}\n"
-                            result_text += f"偏移量: X={shift_x:.4f}mm, Y={shift_y:.4f}mm\n"
-                            result_text += f"容差: X=±{shift_x_tolerance:.4f}mm, Y=±{shift_y_tolerance:.4f}mm\n"
-                            if ball_center is not None and len(ball_center) >= 2:
-                                result_text += f"球中心位置: ({ball_center[0]:.2f}, {ball_center[1]:.2f}) 像素\n"
-                            if size_center is not None and len(size_center) >= 2:
-                                result_text += f"尺寸中心位置: ({size_center[0]:.2f}, {size_center[1]:.2f}) 像素\n"
-                            result_text += "\n"
-                        except Exception as e:
-                            result_text += f"【偏移检测】\n"
-                            result_text += f"错误: {str(e)}\n\n"
-                    elif should_detect_shift:
-                        result_text += f"【偏移检测】\n"
-                        result_text += f"需要同时启用尺寸检测和锡球检测\n\n"
-            except Exception as e:
-                result_text += f"【锡球检测】\n"
-                result_text += f"错误: {str(e)}\n\n"
+        if should_detect_ball:
+            ball = product.ball_result
+            result_text += f"【锡球检测】\n"
+            result_text += f"判定: {'OK' if ball.is_valid else 'NG'}\n"
+            result_text += f"锡球总数: {ball.ball_count}\n"
+            expected_count = self.local_params.get("ball_count", 0)
+            if expected_count > 0:
+                result_text += f"期望数量: {expected_count}\n"
+            if ball.ball_average_radius_mm > 0:
+                result_text += f"平均半径: {ball.ball_average_radius_mm:.2f}mm\n"
+            result_text += "\n"
+            
+            if ball.ball_position:
+                result_text += f"合格锡球 ({len(ball.ball_position)}颗):\n"
+                for i, center in enumerate(ball.ball_position):
+                    radius_mm = ball.ball_radius_mm[i] if i < len(ball.ball_radius_mm) else 0.0
+                    area_mm2 = ball.ball_area_mm[i] if i < len(ball.ball_area_mm) else 0.0
+                    result_text += f"  锡球{i+1}: 半径={radius_mm:.2f}mm, "
+                    result_text += f"面积={area_mm2:.2f}mm², "
+                    result_text += f"中心=({center[0]}, {center[1]})\n"
+                result_text += "\n"
+            
+            if ball.ng_ball_position:
+                result_text += f"不合格锡球 ({len(ball.ng_ball_position)}颗):\n"
+                for i, center in enumerate(ball.ng_ball_position):
+                    radius_mm = ball.ng_ball_radius_mm[i] if i < len(ball.ng_ball_radius_mm) else 0.0
+                    area_mm2 = ball.ng_ball_area_mm[i] if i < len(ball.ng_ball_area_mm) else 0.0
+                    result_text += f"  锡球{i+1}: 半径={radius_mm:.2f}mm, "
+                    result_text += f"面积={area_mm2:.2f}mm², "
+                    result_text += f"中心=({center[0]}, {center[1]})\n"
+                result_text += "\n"
+            
+            # 偏移检测结果（与锡球检测一起显示）
+            if should_detect_shift:
+                shift = product.shift_result
+                shift_x_tolerance = self.local_params.get("shift_x_tolerance", 0.1)
+                shift_y_tolerance = self.local_params.get("shift_y_tolerance", 0.1)
+                result_text += f"【偏移检测】\n"
+                result_text += f"判定: {'OK' if shift.is_valid else 'NG'}\n"
+                result_text += f"偏移量: X={shift.shift_x:.4f}mm, Y={shift.shift_y:.4f}mm\n"
+                result_text += f"容差: X=±{shift_x_tolerance:.4f}mm, Y=±{shift_y_tolerance:.4f}mm\n"
+                ball_center = shift.ball_center
+                size_center = shift.size_center
+                if ball_center is not None and len(ball_center) >= 2:
+                    result_text += f"球中心位置: ({ball_center[0]:.2f}, {ball_center[1]:.2f}) 像素\n"
+                if size_center is not None and len(size_center) >= 2:
+                    result_text += f"尺寸中心位置: ({size_center[0]:.2f}, {size_center[1]:.2f}) 像素\n"
+                result_text += "\n"
         
         # 划痕检测结果
-        if should_detect_scratch and product_info.get("scratch_result") is not None:
-            try:
-                scratch_result = product_info["scratch_result"]
-                if isinstance(scratch_result, tuple) and len(scratch_result) >= 3:
-                    result_dict = scratch_result[2]
-                    is_valid = result_dict.get("is_valid", False)
-                    ng_scratch_contours = result_dict.get("ng_scratch_contours", [])
-                    
-                    result_text += f"【划痕检测】\n"
-                    result_text += f"判定: {'OK' if is_valid else 'NG'}\n"
-                    scratch_length_threshold = self.local_params.get("scratch_length", 5.0)
-                    result_text += f"划痕长度阈值: {scratch_length_threshold}mm\n"
-                    if ng_scratch_contours:
-                        result_text += f"检测到 {len(ng_scratch_contours)} 条NG划痕\n"
-                    result_text += "\n"
-            except Exception as e:
-                result_text += f"【划痕检测】\n"
-                result_text += f"错误: {str(e)}\n\n"
+        if should_detect_scratch:
+            scratch = product.scratch_result
+            result_text += f"【划痕检测】\n"
+            result_text += f"判定: {'OK' if scratch.is_valid else 'NG'}\n"
+            scratch_length_threshold = self.local_params.get("scratch_length", 5.0)
+            result_text += f"划痕长度阈值: {scratch_length_threshold}mm\n"
+            if scratch.scratch_contour:
+                result_text += f"检测到 {len(scratch.scratch_contour)} 条NG划痕\n"
+            result_text += "\n"
         
         result_text += "=" * 50 + "\n"
         
@@ -562,7 +491,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             # detect_type 为 None 或 "all" 时使用 local_params 的开关；为 ball/size/mark/scratch/shift 时仅执行该检测
             pass_detect_type = None if (detect_type is None or detect_type == "all") else detect_type
 
-            success, msg, product_info = execute_product_detection(
+            success, msg, product = execute_product_detection(
                 image=template_gray,
                 detectors=detectors,
                 params=detect_params,
@@ -576,7 +505,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 return
             
             # 绘制检测结果
-            image_result = self._draw_detection_results(self.template_image, product_info)
+            image_result = self._draw_detection_results(self.template_image, product)
             
             # 拼接预处理图像和结果图像
             if detect_type == "all":
@@ -597,7 +526,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             self.display_processed_image(self.processed_image)
             
             # 生成并显示文本结果
-            result_text = self._generate_result_text(product_info)
+            result_text = self._generate_result_text(product)
             self.textEdit_test_result.setPlainText(result_text)
             
         except Exception as e:

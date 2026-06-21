@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from datetime import datetime as dt
 
-from src.support import data_structure
 import numpy as np
 
-from src.support.support_funs import calculate_cpk
+from src.support import data_structure
+from src.support.support_funs import (
+    calculate_cpk,
+    create_alternating_array,
+    calculate_write_positions,
+    get_bga_animation_grid_layout,
+)
 
 _PRIORITY = {"Ball Count": 1, "Size": 2, "Ball_Area": 3, "Mark": 4, "Scratch": 5, "Shift": 6}
 _NG_KEYS = ("Size", "Ball_Area", "Ball Count", "Mark", "Scratch", "Shift")
@@ -17,8 +22,29 @@ _DETECTION_LABELS = {
     "shift_check_enable": "偏移检测",
 }
 
+# 状态码（Modbus 上报与动画统一口径，保持与旧实现一致）
+_STATUS_BLANK = 0      # 非产品格（棋盘空白）
+_STATUS_UNCHECKED = 99  # 合法格但未检
+_DEFECT_CODE = {"Mark": 1, "Size": 3, "Ball Count": 4, "Ball_Area": 5, "Shift": 6, "Scratch": 7}
+_STATUS_OK = 2
+_STATUS_NG_DEFAULT = 8
 
-def _defect_state(product: data_structure.Product) -> tuple[bool, bool, list[str]]:
+# 状态码 → 动画颜色（BGR），与旧 get_full_animation 一致
+_STATUS_COLOR = {
+    2: (0, 255, 0),      # OK - 绿
+    1: (0, 0, 255),      # Mark - 红
+    3: (128, 0, 128),    # Size - 紫
+    4: (0, 165, 255),    # BallCount - 橙
+    5: (0, 255, 255),    # Ball_Area - 黄
+    6: (42, 42, 165),    # Shift - 棕
+    7: (255, 0, 0),      # Scratch - 蓝
+    8: (0, 0, 255),      # NG - 红
+    99: (255, 255, 255),  # 未检 - 白
+    0: (0, 0, 0),        # 空白 - 黑
+}
+
+
+def _defect_state(product: data_structure.Product) -> tuple:
     defect_type = product.defect_type or ["OK"]
     first = defect_type[0] if defect_type else "OK"
     is_empty = first == "Empty"
@@ -26,12 +52,26 @@ def _defect_state(product: data_structure.Product) -> tuple[bool, bool, list[str
     return is_empty, is_ng, defect_type
 
 
-def _primary_ng_type(defect_type: list[str]) -> str | None:
+def _primary_ng_type(defect_type: list):
     candidates = [t for t in defect_type if t in _PRIORITY]
     return min(candidates, key=lambda t: _PRIORITY[t]) if candidates else None
 
 
-def _summarize_defects(products: list[data_structure.Product]) -> tuple[int, int, dict[str, int]]:
+def _status_code(product: data_structure.Product) -> int:
+    """由 Product.defect_type 推导状态码（单一数据源）。"""
+    defect_type = product.defect_type or ["OK"]
+    first = defect_type[0] if defect_type else "OK"
+    if first == "Empty":
+        return _STATUS_UNCHECKED
+    if first == "OK":
+        return _STATUS_OK
+    for name, code in _DEFECT_CODE.items():
+        if name in defect_type:
+            return code
+    return _STATUS_OK if "OK" in defect_type else _STATUS_NG_DEFAULT
+
+
+def _summarize_defects(products: list) -> tuple:
     ng_total = empty_count = 0
     defect_counts = {k: 0 for k in _NG_KEYS}
     for product in products:
@@ -69,110 +109,216 @@ def _product_log_row(product: data_structure.Product, index: int) -> dict:
 
 
 class BGA_STRIP:
-    def __init__(self, params: dict):
+    def __init__(self, station, strip_side, strip_lot, strip_sn, strip_create_time, params):
         self.params = params
+        rows = int(params.get("total_rows", 0) or 0)
+        cols = int(params.get("total_cols", 0) or 0)
+        wrows = int(params.get("current_row", 0) or 0)
+        wcols = int(params.get("current_col", 0) or 0)
+
+        start_element = 0 if strip_side == "front" else 1
+        base = create_alternating_array(rows, cols, start_element, (0, 99))
+        # 合法格（棋盘奇偶，由 side 决定）
+        self.valid_mask = (base == 99) if rows > 0 and cols > 0 else np.zeros((rows, cols), dtype=bool)
+
+        if rows > 0 and cols > 0 and wrows > 0 and wcols > 0:
+            window_base = create_alternating_array(wrows, wcols, start_element, (0, 99))
+            self.position_list = calculate_write_positions(base, window_base)
+        else:
+            self.position_list = []
+
+        self.window_rows = wrows
+        self.window_cols = wcols
+        self.image_dict = {}
+        self.count = 0  # 蛇形写入游标
+
         self.bga_strip: data_structure.Bga_Strip = data_structure.Bga_Strip(
-            station=params.get("station", ""),
-            strip_lot="",
-            strip_sn="",
-            strip_create_time="",
-            strip_side=params.get("strip_side", "front"),
-            strip_cols=params.get("total_cols", 0),
-            strip_rows=params.get("total_rows", 0),
-            product_array=np.full(
-                (params.get("total_rows", 0), params.get("total_cols", 0)),
-                None,
-                dtype=object,
-            ),
+            station=station,
+            strip_lot=strip_lot,
+            strip_sn=strip_sn,
+            strip_create_time=strip_create_time,
+            strip_side=strip_side,
+            strip_cols=cols,
+            strip_rows=rows,
+            window_rows=wrows,
+            window_cols=wcols,
+            product_array=np.full((rows, cols), None, dtype=object),
             strip_image=None,
             animation_image=None,
         )
 
-    def _iter_products(self) -> list[data_structure.Product]:
+    # ---- 便捷属性（线程/UI 访问）----
+    @property
+    def strip_rows(self) -> int:
+        return self.bga_strip.strip_rows
+
+    @property
+    def strip_cols(self) -> int:
+        return self.bga_strip.strip_cols
+
+    @property
+    def strip_side(self) -> str:
+        return self.bga_strip.strip_side
+
+    @property
+    def strip_lot(self) -> str:
+        return self.bga_strip.strip_lot
+
+    @property
+    def strip_sn(self) -> str:
+        return self.bga_strip.strip_sn
+
+    @property
+    def station(self) -> str:
+        return self.bga_strip.station
+
+    @property
+    def product_array(self) -> np.ndarray:
+        return self.bga_strip.product_array
+
+    # ---- 写入 ----
+    def pop_next_position(self):
+        """取下一个蛇形写入位置并推进游标。返回 (start_point, window_size) 或 None。"""
+        if self.count >= len(self.position_list):
+            return None
+        pos = self.position_list[self.count]
+        self.count += 1
+        return (pos[0], pos[1]), (self.window_rows, self.window_cols)
+
+    def write(self, start_point, window_size, slot, current_image):
+        """
+        将窗口内 slot 的 Product 写入 product_array（每拍即写，单一数据源）。
+        仅写入 valid_mask 合法且尚未写入的格；slot 对应格为 None 时写 Empty 占位 Product。
+
+        参数:
+            start_point: (row, col) 窗口左上角在 product_array 中的位置
+            window_size: (rows, cols) 窗口尺寸（= current_row × current_col）
+            slot: List[List[Optional[Product]]]，形状为 window_size
+            current_image: 当前整帧图像
+        """
+        if start_point is None:
+            return
+        r0, c0 = int(start_point[0]), int(start_point[1])
+        self.image_dict[(r0, c0)] = current_image
+
+        if slot is None:
+            return
+
+        wr, wc = int(window_size[0]), int(window_size[1])
+        pa = self.bga_strip.product_array
         rows, cols = self.bga_strip.strip_rows, self.bga_strip.strip_cols
-        products: list[data_structure.Product] = []
+
+        for lr in range(wr):
+            for lc in range(wc):
+                gr, gc = r0 + lr, c0 + lc
+                if gr < 0 or gr >= rows or gc < 0 or gc >= cols:
+                    continue
+                if not self.valid_mask[gr, gc]:
+                    continue
+                if pa[gr, gc] is not None:
+                    continue
+                cell = None
+                if lr < len(slot) and slot[lr] is not None and lc < len(slot[lr]):
+                    cell = slot[lr][lc]
+                if cell is None:
+                    cell = data_structure.Product(defect_type=["Empty"], product_status="Empty")
+                pa[gr, gc] = cell
+
+    # ---- 派生视图 ----
+    def get_status_array(self) -> np.ndarray:
+        rows, cols = self.bga_strip.strip_rows, self.bga_strip.strip_cols
+        arr = np.zeros((rows, cols), dtype=int)
+        pa = self.bga_strip.product_array
         for r in range(rows):
             for c in range(cols):
-                product = self.bga_strip.product_array[r, c]
-                if product is not None:
-                    products.append(product)
-        return products
-
-    def write(
-        self,
-        start_point: tuple[int, int],
-        window_size: tuple[int, int],
-        product: data_structure.Product,
-    ):
-        for row in range(start_point[0], start_point[0] + window_size[0]):
-            for col in range(start_point[1], start_point[1] + window_size[1]):
-                self.bga_strip.product_array[row, col] = product
-
-    def set_strip_image(self, strip_image: np.ndarray):
-        self.bga_strip.strip_image = strip_image
-
-    def set_animation_image(self, animation_image: np.ndarray):
-        self.bga_strip.animation_image = animation_image
-
-    def get_strip_image(self):
-        return self.bga_strip.strip_image
-
-    def get_animation_image(self):
-        return self.bga_strip.animation_image
-
-    def render_animation(self):
-        animation_map = np.zeros((self.bga_strip.strip_rows, self.bga_strip.strip_cols))
-        for row in range(self.bga_strip.strip_rows):
-            for col in range(self.bga_strip.strip_cols):
-                current_product = self.bga_strip.product_array[row, col]
-                if current_product is not None:
-                    animation_map[row, col] = current_product.animation_color
+                if not self.valid_mask[r, c]:
+                    arr[r, c] = _STATUS_BLANK
+                elif pa[r, c] is None:
+                    arr[r, c] = _STATUS_UNCHECKED
                 else:
-                    animation_map[row, col] = 0
+                    arr[r, c] = _status_code(pa[r, c])
+        return arr
 
-        h, w = animation_map.shape
+    # 兼容旧的 .full_value 直接访问
+    @property
+    def full_value(self) -> np.ndarray:
+        return self.get_status_array()
+
+    def get_modbus_data(self) -> np.ndarray:
+        return self.get_status_array()
+
+    def get_full_animation(self) -> np.ndarray:
+        array = self.get_status_array()
+        h, w = array.shape if array.ndim == 2 else (0, 0)
         h = max(1, h)
         w = max(1, w)
-        margin = 2
-        block_height = max(1, 480 // h)
-        block_width = max(1, 150 // w)
-        animation_image = np.full(
-            (h * block_height + (h + 1) * margin, w * block_width + (w + 1) * margin, 3),
-            40,
-            dtype=np.uint8,
+        margin, block_height, block_width, img_h, img_w = get_bga_animation_grid_layout(
+            h, w, margin=2, canvas_h=480, canvas_w=150
         )
-        for i in range(h):
-            for j in range(w):
+        img = np.full((img_h, img_w, 3), 40, dtype=np.uint8)
+        for i in range(array.shape[0]):
+            for j in range(array.shape[1]):
                 y1 = margin + i * (block_height + margin)
                 x1 = margin + j * (block_width + margin)
                 y2 = y1 + block_height
                 x2 = x1 + block_width
-                animation_image[y1:y2, x1:x2] = animation_map[i, j]
+                img[y1:y2, x1:x2] = _STATUS_COLOR.get(int(array[i, j]), (255, 255, 255))
+        return img
 
-        self.set_animation_image(animation_image)
+    def set_strip_image(self, strip_image: np.ndarray):
+        self.bga_strip.strip_image = strip_image
 
-    def get_modbus_data(self):
-        modbus_data = np.zeros((self.bga_strip.strip_rows, self.bga_strip.strip_cols))
-        code_map = {
-            "OK": 2,
-            "Mark": 1,
-            "Size": 3,
-            "Ball Count": 4,
-            "Ball_Area": 5,
-            "Shift": 6,
-            "Scratch": 7,
-        }
-        for row in range(self.bga_strip.strip_rows):
-            for col in range(self.bga_strip.strip_cols):
-                current_product = self.bga_strip.product_array[row, col]
-                if current_product is None:
-                    modbus_data[row, col] = 0
-                    continue
-                defect_type = (current_product.defect_type or ["OK"])[0]
-                modbus_data[row, col] = code_map.get(defect_type, 0)
-        return modbus_data
+    def get_strip_image(self):
+        return self.bga_strip.strip_image
 
-    def get_log_info(self) -> dict | None:
+    def get_pos_image(self, start_point):
+        return self.image_dict.get((int(start_point[0]), int(start_point[1])), None)
+
+    def get_frame_image_for_cell(self, row: int, col: int):
+        """返回覆盖 (row, col) 的最后一次 write 整帧原图。"""
+        row, col = int(row), int(col)
+        wr, wc = self.window_rows, self.window_cols
+        for i in range(min(self.count, len(self.position_list)) - 1, -1, -1):
+            r0, c0 = int(self.position_list[i][0]), int(self.position_list[i][1])
+            if r0 <= row < r0 + wr and c0 <= col < c0 + wc:
+                return self.image_dict.get((r0, c0))
+        return None
+
+    def get_product(self, row: int, col: int):
+        rows, cols = self.bga_strip.strip_rows, self.bga_strip.strip_cols
+        if 0 <= row < rows and 0 <= col < cols:
+            return self.bga_strip.product_array[row, col]
+        return None
+
+    def _iter_products(self) -> list:
+        """按蛇形写入序遍历已写入的 Product（保证 product_index 与旧实现一致）。"""
+        rows, cols = self.bga_strip.strip_rows, self.bga_strip.strip_cols
+        pa = self.bga_strip.product_array
+        products = []
+        seen = set()
+        if self.position_list:
+            for pos in self.position_list:
+                r0, c0 = pos[0], pos[1]
+                for lr in range(self.window_rows):
+                    for lc in range(self.window_cols):
+                        gr, gc = r0 + lr, c0 + lc
+                        if gr < 0 or gr >= rows or gc < 0 or gc >= cols:
+                            continue
+                        if (gr, gc) in seen:
+                            continue
+                        product = pa[gr, gc]
+                        if product is not None:
+                            seen.add((gr, gc))
+                            products.append(product)
+        else:
+            for r in range(rows):
+                for c in range(cols):
+                    product = pa[r, c]
+                    if product is not None:
+                        products.append(product)
+        return products
+
+    def get_log_info(self):
         try:
             products = self._iter_products()
             ng_total, _, defect_counts = _summarize_defects(products)
@@ -283,6 +429,3 @@ class BGA_STRIP:
                 "yield_rate": 0.0,
                 "defect_counts": {k: 0 for k in ("Mark", "Size", "Ball_Area", "Ball Count", "Scratch", "Shift")},
             }
-
-    def get_product(self, row: int, col: int) -> data_structure.Product:
-        return self.bga_strip.product_array[row, col]

@@ -23,13 +23,17 @@ from src.support.support_funs import (
     draw_detection_results,
     fulltray_load_model,
     fulltray_predict_single_image,
-    Bga_Strip,
     ensure_gray_u8,
     ensure_bgr_u8,
     assign_matches_to_grid,
     normalize_grid_search_roi,
     is_flat_roi,
+    parse_product_bbox,
+    crop_product_context_region,
+    overlay_bgr_patch,
+    resolve_product_overlay_patch,
 )
+from src.support.bga_strip import BGA_STRIP as Bga_Strip
 from src.support.InteractiveBgaLabel import InteractiveBgaLabel
 from src.detectors.ball_detector import BallDetector
 from src.detectors.size_detector import SizeDetector
@@ -64,6 +68,11 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "sucker1": None,
             "sucker2": None,
             "fulltray": None
+        }
+        # BGA 单格点击后，该产品所属 write 窗口的整帧原图（供 template_validity_test）
+        self.selected_product_frame_image = {
+            "dry": None,
+            "transfer": None,
         }
         self.CAM_LIST=[
             {"alias": "dry_cam",        "camera_type": "Line", "device_index": 5},
@@ -395,7 +404,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 ("transfer", "work_transfer_params"),
                 ("fulltray", "work_fulltray_params"),
             ):
-                _img = self.current_image.get(_station)
+                _img = self._get_station_work_image(_station)
                 if _img is None or not hasattr(_img, "shape") or len(_img.shape) < 2:
                     continue
                 _ih, _iw = int(_img.shape[0]), int(_img.shape[1])
@@ -812,6 +821,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                     label = getattr(self, f"label_current_cam_live_{prefix}")
                     self._update_label_from_image(label, image_bgr)
                 self.current_image[prefix] = image_bgr
+                self._clear_selected_product_frame(prefix)
                 QApplication.processEvents()
     # =============================================================================
     # 5. 线程控制
@@ -1157,6 +1167,26 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
     # 7. BGA 显示
     # =============================================================================
 
+    def _get_bga_label_pair(self, work_position):
+        if work_position == "dry":
+            return self.label_mapping_dry, self.label_image_show_mapping_1
+        return self.label_mapping_transfer, self.label_image_show_mapping_2
+
+    def _get_bga_instance(self, work_position):
+        label, _ = self._get_bga_label_pair(work_position)
+        return getattr(label, "bga", None)
+
+    def _get_station_work_image(self, station):
+        """模板测试/参数同步用图：优先 BGA 点击缓存的整帧，否则 current_image。"""
+        frame = self.selected_product_frame_image.get(station)
+        if frame is not None:
+            return frame
+        return self.current_image.get(station)
+
+    def _clear_selected_product_frame(self, station):
+        if station in self.selected_product_frame_image:
+            self.selected_product_frame_image[station] = None
+
     def update_bga_display(self, bga_instance, side, work_position="dry"):
         """
         更新BGA显示（在主线程中调用）
@@ -1166,13 +1196,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             work_position: "dry" 或 "transfer"，用于确定更新哪个 label
         """
         try:
-            if work_position == "dry":
-                label = self.label_mapping_dry
-                label_mapping_show = self.label_image_show_mapping_1
-            else:
-                label = self.label_mapping_transfer
-                label_mapping_show = self.label_image_show_mapping_2
-
+            label, label_mapping_show = self._get_bga_label_pair(work_position)
             label.set_bga_data(bga_instance)
             animation = bga_instance.get_full_animation()
             self._update_label_from_image(label_mapping_show, animation)
@@ -1180,30 +1204,55 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             print(f"更新BGA显示失败 ({work_position}): {str(e)}")
             traceback.print_exc()
 
+    def _clicked_product_bbox(self, product, row, col):
+        """返回 (x,y,w,h) 或 (None, error_message)。"""
+        if product is None:
+            return None, f"该格 ({row}, {col}) 尚无产品数据❌"
+        if product.product_status == "Empty" or not product.product_position:
+            return None, f"该格 ({row}, {col}) 为空或未检测，无法显示❌"
+        bbox = parse_product_bbox(product.product_position)
+        if bbox is None:
+            return None, "产品位置信息不完整或尺寸无效❌"
+        return bbox, None
+
     def on_bga_region_clicked(self, pos_start, work_position="dry"):
-        """BGA区域点击回调，显示对应区域的图像"""
+        """BGA区域点击：3倍 product 裁剪原图写入 current_image，叠加 result 后显示。"""
         try:
-            if work_position == "dry":
-                bga_instance = getattr(self.label_mapping_dry, 'bga', None)
-            else:
-                bga_instance = getattr(self.label_mapping_transfer, 'bga', None)
+            bga_instance = self._get_bga_instance(work_position)
             if bga_instance is None:
+                QMessageBox.warning(self, "错误", "BGA 数据未加载，无法显示该格图像❌")
                 return
-            current_image = bga_instance.get_pos_image(pos_start)
-            if current_image is not None:
-                label_name = getattr(self, f"label_current_cam_live_{work_position}")
-                if current_image.dtype != np.uint8:
-                    if np.issubdtype(current_image.dtype, np.floating) and current_image.max() <= 1.0:
-                        current_image = (np.clip(current_image, 0, 1) * 255).astype(np.uint8)
-                    else:
-                        current_image = np.clip(current_image, 0, 255).astype(np.uint8)
-                current_image = ensure_bgr_u8(current_image, copy=True)
-                self._update_label_from_image(label_name, current_image)
-                self.current_image[work_position] = current_image
-                self.template_validity_test(work_position)
+
+            row, col = int(pos_start[0]), int(pos_start[1])
+            product = bga_instance.get_product(row, col)
+            bbox, err = self._clicked_product_bbox(product, row, col)
+            if bbox is None:
+                QMessageBox.warning(self, "错误", err)
+                return
+            x, y, w, h = bbox
+
+            frame_image = bga_instance.get_frame_image_for_cell(row, col)
+            if frame_image is None:
+                QMessageBox.warning(self, "错误", f"未找到该格 ({row}, {col}) 对应的整帧原图❌")
+                return
+
+            crop_info = crop_product_context_region(frame_image, x, y, w, h)
+            if crop_info is None:
+                QMessageBox.warning(self, "错误", "裁剪区域无效❌")
+                return
+            cropped, prod_x, prod_y = crop_info
+
+            self.selected_product_frame_image[work_position] = ensure_bgr_u8(frame_image, copy=True)
+            self.current_image[work_position] = cropped
+            display_image = overlay_bgr_patch(
+                cropped, resolve_product_overlay_patch(product), prod_x, prod_y
+            )
+            label_name = getattr(self, f"label_current_cam_live_{work_position}")
+            self._update_label_from_image(label_name, display_image)
         except Exception as e:
             print(f"BGA区域点击显示错误 ({work_position}): {str(e)}")
             traceback.print_exc()
+            QMessageBox.warning(self, "错误", f"BGA 区域显示失败：{e}❌")
 
     # =============================================================================
     # 8. 参数与对话框
@@ -1374,9 +1423,11 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
 
         start_time = time.time()
 
-        image = self.current_image.get(station)
+        image = self._get_station_work_image(station)
+        if image is not None:
+            image = ensure_bgr_u8(image, copy=True)
         if image is None:
-            QMessageBox.warning(self, "错误", "请先选择当前图像❌")
+            QMessageBox.warning(self, "错误", "请先选择当前图像或点击 BGA 单格❌")
             return
 
         # 根据 config 直接创建临时检测器
@@ -1512,6 +1563,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "allow_mark": allow_mark_for_execute,
             "roi_block": params.get("roi_block", []),
         }
+        slot = [[None] * grid_c for _ in range(grid_r)]
         for gr in range(grid_r):
             for gcol in range(grid_c):
                 pos = pos_grid[gr][gcol]
@@ -1521,7 +1573,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 if x + template_w > img_w or y + template_h > img_h:
                     continue
                 product_image = image[y:y + template_h, x:x + template_w]
-                success, msg, product_info = execute_product_detection(
+                success, msg, product = execute_product_detection(
                     image=product_image,
                     detectors=detectors,
                     params=detect_params,
@@ -1529,15 +1581,18 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                     early_return_on_ng=False,
                     error_callback=None,
                 )
-                product_info["x"], product_info["y"] = x, y
+                product.product_position = [x, y, template_w, template_h]
+                product.product_image = product_image.copy()
+                slot[gr][gcol] = product
                 if not success:
                     continue
                 _, _, drawn_patch = draw_detection_results(
                     product_image.copy(),
-                    product_info,
-                    mark_color="green" if product_info.get("defect_type") == ["OK"] else "red",
+                    product,
+                    mark_color="green" if product.defect_type == ["OK"] else "red",
                 )
                 if drawn_patch is not None:
+                    product.product_image_result = drawn_patch.copy()
                     image_result[y:y + template_h, x:x + template_w] = drawn_patch
                     image_result = cv.rectangle(
                         image_result, (x, y), (x + template_w, y + template_h), (0, 255, 255), 4
@@ -1545,6 +1600,31 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         cv.putText(image_result, f"Search ROI", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
         cv.rectangle(image_result, (search_roi[0], search_roi[1]), (search_roi[0] + search_roi[2], search_roi[1] + search_roi[3]), (255, 255, 0), 5)
         self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), image_result)
+
+        # 构建单窗口 BGA_STRIP 并驱动 InteractiveBgaLabel（动画着色 + 单格点击查看 product）
+        try:
+            bga_params = dict(params)
+            bga_params["total_rows"] = grid_r
+            bga_params["total_cols"] = grid_c
+            bga_params["current_row"] = grid_r
+            bga_params["current_col"] = grid_c
+            bga = Bga_Strip(
+                station=station,
+                strip_side="front",
+                strip_lot="",
+                strip_sn="",
+                strip_create_time="",
+                params=bga_params,
+            )
+            # 模板测试为单拍调试视图：放开棋盘约束，显示所有检出格
+            bga.valid_mask = np.ones((grid_r, grid_c), dtype=bool)
+            posinfo = bga.pop_next_position()
+            if posinfo is not None:
+                bga.write(posinfo[0], posinfo[1], slot, image)
+            self.update_bga_display(bga, "front", work_position=station)
+        except Exception as e:
+            print(f"模板测试更新BGA显示失败: {e}")
+            traceback.print_exc()
 
         print(time.time()-start_time)
     # =============================================================================
@@ -1562,6 +1642,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             QMessageBox.warning(self, "错误", "图像加载失败❌")
             return
         self.current_image[station] = image
+        self._clear_selected_product_frame(station)
         if station == "fulltray":
             self._update_fulltray_graphics_view_from_image(image)
         else:
