@@ -1021,7 +1021,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                     else:
                         self._update_label_from_image(self.label_image_show_dry, image)
                         self._update_label_from_image(self.label_current_cam_live_dry, image)
-                        self.update_bga_display(bga_strip, bga_strip.side, "dry")
+                        self.update_bga_display(bga_strip, bga_strip.strip_side, "dry")
                 except Exception as e:
                     print(f"干燥台显示错误: {e}")
         elif station == "transfer":
@@ -1033,7 +1033,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                     else:
                         self._update_label_from_image(self.label_image_show_transfer, image)
                         self._update_label_from_image(self.label_current_cam_live_transfer, image)
-                        self.update_bga_display(bga_strip, bga_strip.side, "transfer")
+                        self.update_bga_display(bga_strip, bga_strip.strip_side, "transfer")
                 except Exception as e:
                     print(f"移栽台显示错误: {e}")
         elif station == "sucker_1":
@@ -1052,7 +1052,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
     def _update_label_from_image(self, label, image: np.ndarray):
         image = ensure_bgr_u8(image, copy=True)
         if isinstance(label, ImageViewer):
-            label.setImage(image)
+            label.setImage(image,reset_view = True)
             return
         height, width, channel = image.shape
         bytes_per_line = 3 * width
@@ -1578,7 +1578,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                     detectors=detectors,
                     params=detect_params,
                     detect_type=None,
-                    early_return_on_ng=False,
+                    early_return_on_ng= True,
                     error_callback=None,
                 )
                 product.product_position = [x, y, template_w, template_h]
@@ -1602,29 +1602,30 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self._update_label_from_image(getattr(self, f"label_current_cam_live_{station}"), image_result)
 
         # 构建单窗口 BGA_STRIP 并驱动 InteractiveBgaLabel（动画着色 + 单格点击查看 product）
-        try:
-            bga_params = dict(params)
-            bga_params["total_rows"] = grid_r
-            bga_params["total_cols"] = grid_c
-            bga_params["current_row"] = grid_r
-            bga_params["current_col"] = grid_c
-            bga = Bga_Strip(
-                station=station,
-                strip_side="front",
-                strip_lot="",
-                strip_sn="",
-                strip_create_time="",
-                params=bga_params,
-            )
-            # 模板测试为单拍调试视图：放开棋盘约束，显示所有检出格
-            bga.valid_mask = np.ones((grid_r, grid_c), dtype=bool)
-            posinfo = bga.pop_next_position()
-            if posinfo is not None:
-                bga.write(posinfo[0], posinfo[1], slot, image)
-            self.update_bga_display(bga, "front", work_position=station)
-        except Exception as e:
-            print(f"模板测试更新BGA显示失败: {e}")
-            traceback.print_exc()
+        if station == "dry":
+            try:
+                bga_params = dict(params)
+                bga_params["total_rows"] = grid_r
+                bga_params["total_cols"] = grid_c
+                bga_params["current_row"] = grid_r
+                bga_params["current_col"] = grid_c
+                bga = Bga_Strip(
+                    station=station,
+                    strip_side="front",
+                    strip_lot="",
+                    strip_sn="",
+                    strip_create_time="",
+                    params=bga_params,
+                )
+                # 模板测试为单拍调试视图：放开棋盘约束，显示所有检出格
+                bga.valid_mask = np.ones((grid_r, grid_c), dtype=bool)
+                posinfo = bga.pop_next_position()
+                if posinfo is not None:
+                    bga.write(posinfo[0], posinfo[1], slot, image)
+                self.update_bga_display(bga, "front", work_position=station)
+            except Exception as e:
+                print(f"模板测试更新BGA显示失败: {e}")
+                traceback.print_exc()
 
         print(time.time()-start_time)
     # =============================================================================

@@ -28,7 +28,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='JigSaw_v2',
+    name='JigSaw_v2.1',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

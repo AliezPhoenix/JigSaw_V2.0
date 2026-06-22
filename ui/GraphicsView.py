@@ -10,12 +10,27 @@ class ImageViewer(QGraphicsView):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        # 初始化缩放因子
         self.zoom_factor = 1.25
         self.zoom_in_pos = None
+        self._view_fitted = False
 
         self.setDragMode(QGraphicsView.ScrollHandDrag)
+        self.setAlignment(Qt.AlignCenter)
         self.scene_image = QGraphicsScene()
+        self.item_image = None
+
+    def _fit_image_in_view(self):
+        """将当前图像居中并自适应视口大小（保持宽高比）。"""
+        if self.item_image is None:
+            return
+        rect = self.item_image.boundingRect()
+        if rect.isEmpty():
+            return
+        self.scene_image.setSceneRect(rect)
+        self.resetTransform()
+        self.fitInView(rect, Qt.KeepAspectRatio)
+        self.centerOn(rect.center())
+        self._view_fitted = True
 
     def setImage(self, image, reset_view=False):
         """
@@ -53,29 +68,43 @@ class ImageViewer(QGraphicsView):
         
         pix_image = QPixmap.fromImage(q_image.copy())
 
-        if (
-            not reset_view
-            and hasattr(self, "item_image")
-            and self.item_image is not None
-            and self.scene_image is not None
-        ):
+        has_item = self.item_image is not None
+        if has_item and not reset_view:
+            old = self.item_image.pixmap()
             self.item_image.setPixmap(pix_image)
+            if self._view_fitted and (
+                old is None
+                or old.isNull()
+                or old.width() != pix_image.width()
+                or old.height() != pix_image.height()
+            ):
+                self._fit_image_in_view()
             return
 
-        for item in self.scene_image.items():
-            if isinstance(item, QGraphicsPixmapItem):
-                self.scene_image.removeItem(item)
-        
-        self.item_image = QGraphicsPixmapItem(pix_image)
-        
-        self.scene_image.addItem(self.item_image)
-        
-        self.setScene(self.scene_image)
+        if has_item:
+            self.item_image.setPixmap(pix_image)
+        else:
+            for item in self.scene_image.items():
+                if isinstance(item, QGraphicsPixmapItem):
+                    self.scene_image.removeItem(item)
+            self.item_image = QGraphicsPixmapItem(pix_image)
+            self.scene_image.addItem(self.item_image)
+            self.setScene(self.scene_image)
 
-        self.resetTransform()
-        self.fitInView(self.scene_image.sceneRect(), Qt.KeepAspectRatio)
+        self._fit_image_in_view()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._view_fitted:
+            self._fit_image_in_view()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._view_fitted:
+            self._fit_image_in_view()
 
     def wheelEvent(self, event: QWheelEvent):
+        self._view_fitted = False
         # 检查滚动的方向
         if event.angleDelta().y() < 0:
             factor = 1 / self.zoom_factor
@@ -93,7 +122,7 @@ class ImageViewer(QGraphicsView):
         self.centerOn(self.zoom_in_pos)
 
     def isZoomed(self):
-        return self.transform().m11() != 1.0 or self.transform().m22() != 1.0
+        return not self._view_fitted
 
     def get_visible_image_rect(self):
         """
