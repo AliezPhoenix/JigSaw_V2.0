@@ -1448,6 +1448,36 @@
                   <column/>
                  </widget>
                 </item>
+                <item>
+                 <layout class="QHBoxLayout" name="horizontalLayout_statistics_undo">
+                  <item>
+                   <widget class="QPushButton" name="pushButton_undo_dry">
+                    <property name="enabled">
+                     <bool>false</bool>
+                    </property>
+                    <property name="toolTip">
+                     <string>仅撤销界面累计，不影响设备</string>
+                    </property>
+                    <property name="text">
+                     <string>撤销干燥台</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="pushButton_undo_transfer">
+                    <property name="enabled">
+                     <bool>false</bool>
+                    </property>
+                    <property name="toolTip">
+                     <string>仅撤销界面累计，不影响设备</string>
+                    </property>
+                    <property name="text">
+                     <string>撤销移栽台</string>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
+                </item>
                </layout>
               </widget>
              </item>

@@ -1,3 +1,5 @@
+import copy
+from collections import deque
 from threading import Thread
 from src.support import support_funs
 import ui.main_window_ui as main_window_ui
@@ -135,6 +137,10 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 'defect_counts': {'Mark': 0, 'Size': 0, 'Ball_Area': 0, 'Ball Count': 0, 'Scratch': 0, 'Shift': 0}
             }
         }
+        self._stats_undo_stacks = {
+            '干燥台': deque(maxlen=10),
+            '移栽台': deque(maxlen=10),
+        }
         self._devices_connect(progress_callback=_report)
         _report(50, "连接按钮信号...")
         self._all_button_connect()
@@ -202,6 +208,31 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             }
         """)
         self._update_statistics_display()
+
+    _DEFAULT_DEFECT_COUNTS = {
+        'Mark': 0, 'Size': 0, 'Ball_Area': 0, 'Ball Count': 0, 'Scratch': 0, 'Shift': 0
+    }
+
+    def _reset_station_statistics(self, station_name: str, lot_id: str):
+        self.statistics_data[station_name] = {
+            'lot_id': lot_id,
+            'total_count': 0,
+            'ng_count': 0,
+            'yield_rate': 0.0,
+            'defect_counts': dict(self._DEFAULT_DEFECT_COUNTS),
+        }
+
+    def _refresh_undo_buttons(self):
+        self.pushButton_undo_dry.setEnabled(bool(self._stats_undo_stacks['干燥台']))
+        self.pushButton_undo_transfer.setEnabled(bool(self._stats_undo_stacks['移栽台']))
+
+    def _undo_statistics(self, station_name: str):
+        stack = self._stats_undo_stacks.get(station_name)
+        if not stack:
+            return
+        self.statistics_data[station_name] = stack.pop()
+        self._update_statistics_display()
+        self._refresh_undo_buttons()
 
     def _init_all_tabs(self):
         tab_count = self.tabWidget.count()
@@ -517,6 +548,8 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
 
     def _all_button_connect(self):
         self.pushButton_start.clicked.connect(self.start_thread)
+        self.pushButton_undo_dry.clicked.connect(lambda: self._undo_statistics("干燥台"))
+        self.pushButton_undo_transfer.clicked.connect(lambda: self._undo_statistics("移栽台"))
         self.pushButton_connect.clicked.connect(self._devices_connect)
         self.pushButton_stop.clicked.connect(self.stop)
         self.pushButton_read_cam_params_dry.clicked.connect(lambda: self._operate_hardware("read_cam_params","dry_cam"))
@@ -1115,19 +1148,31 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 tbl.setItem(row, col, item)
 
     def _update_statistics(self, station: str, stats_info: dict):
-        """根据线程上报的 stats_info 更新 statistics_data 并刷新表格"""
+        """累加 strip 级 stats_info 到 lot 统计，支持撤销堆栈"""
         if stats_info is None:
             return
         station_name = stats_info.get('station', '')
         if station_name not in self.statistics_data:
             return
-        self.statistics_data[station_name]['lot_id'] = stats_info.get('lot_id', '-') or '-'
-        self.statistics_data[station_name]['total_count'] = stats_info.get('total_count', 0)
-        self.statistics_data[station_name]['ng_count'] = stats_info.get('ng_count', 0)
-        self.statistics_data[station_name]['yield_rate'] = stats_info.get('yield_rate', 0.0)
-        dc = stats_info.get('defect_counts', {})
-        self.statistics_data[station_name]['defect_counts'] = dict(dc) if dc else {}
+        new_lot = stats_info.get('lot_id', '') or '-'
+        cur = self.statistics_data[station_name]
+        if new_lot != cur['lot_id'] and cur['lot_id'] not in ('-', ''):
+            self._stats_undo_stacks[station_name].clear()
+            self._reset_station_statistics(station_name, new_lot)
+            cur = self.statistics_data[station_name]
+        elif cur['lot_id'] in ('-', ''):
+            cur['lot_id'] = new_lot
+
+        self._stats_undo_stacks[station_name].append(copy.deepcopy(cur))
+        cur['lot_id'] = new_lot
+        cur['total_count'] += stats_info.get('total_count', 0)
+        cur['ng_count'] += stats_info.get('ng_count', 0)
+        for k, v in (stats_info.get('defect_counts') or {}).items():
+            cur['defect_counts'][k] = cur['defect_counts'].get(k, 0) + v
+        total = cur['total_count']
+        cur['yield_rate'] = ((total - cur['ng_count']) / total * 100) if total > 0 else 0.0
         self._update_statistics_display()
+        self._refresh_undo_buttons()
 
     def _update_message(self, station: str, msg: str):
         pass
