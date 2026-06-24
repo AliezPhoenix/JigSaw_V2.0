@@ -50,13 +50,7 @@ class TransferThread(QThread):
         
         # NG 监控：上次告警码，用于节流
         self._last_alarm_code = 0
-        # Lot 级统计（主界面按 lot_id 汇总）
-        self._lot_stats = {
-            "lot_id": "",
-            "total_count": 0,
-            "ng_count": 0,
-            "defect_counts": {"Mark": 0, "Size": 0, "Ball_Area": 0, "Ball Count": 0, "Scratch": 0, "Shift": 0}
-        }
+        self._current_lot = ""
     
     #——————————————————————————————参数更新函数————————————————————————————————————————————————————————————————————
     def update_params(self,params:dict):
@@ -336,14 +330,9 @@ class TransferThread(QThread):
                 lot = hex_to_string(self.MM.read("transfer_modbus", address=20, count=30, function_code=cst.READ_INPUT_REGISTERS)[1])
                 sn = hex_to_string(self.MM.read("transfer_modbus", address=55, count=30, function_code=cst.READ_INPUT_REGISTERS)[1])
                 print(f"TRANSFER:lot:{lot},sn:{sn}")
-                # lot_id 变化时重置 lot 级统计与告警状态
-                if lot != self._lot_stats.get("lot_id", ""):
-                    self._lot_stats = {
-                        "lot_id": lot,
-                        "total_count": 0,
-                        "ng_count": 0,
-                        "defect_counts": {"Mark": 0, "Size": 0, "Ball_Area": 0, "Ball Count": 0, "Scratch": 0, "Shift": 0}
-                    }
+                # lot_id 变化时重置告警状态（lot 累计由主界面维护）
+                if lot != self._current_lot:
+                    self._current_lot = lot
                     self._last_alarm_code = 0
                 # 与 Rebuild：仅 trigger_front XOR trigger_back 时新建对应 BGA 并更新 side；否则保持 bga_strip 与 current_side
                 if trigger_front and not trigger_back:
@@ -517,12 +506,6 @@ class TransferThread(QThread):
                 )
                 allow_handshake = self._transfer_plc_allow_handshake()
                 if strip_done_modbus:
-                    if stats_info:
-                        self._lot_stats["total_count"] += stats_info.get("total_count", 0)
-                        self._lot_stats["ng_count"] += stats_info.get("ng_count", 0)
-                        for k, v in (stats_info.get("defect_counts") or {}).items():
-                            self._lot_stats["defect_counts"][k] = self._lot_stats["defect_counts"].get(k, 0) + v
-
                     if allow_handshake:
                         self._transfer_finish_strip_log_and_coil(mode)
                     else:
@@ -540,8 +523,8 @@ class TransferThread(QThread):
                         except Exception as e:
                             print(f"NG监控 复位 Modbus 写入异常: {e}")
 
-                    lot_emit = self._build_lot_stats_for_emit(None, is_strip_finished=True)
-                    self._update_statistics_signal.emit(lot_emit)
+                    if stats_info:
+                        self._update_statistics_signal.emit(stats_info)
 
                 elif allow_handshake:
                     time.sleep(0.05)#通讯延迟时间
@@ -562,9 +545,6 @@ class TransferThread(QThread):
                     strip_side=self.current_side,
                     allow_handshake = allow_handshake,
                 )
-                if stats_info and not strip_done_modbus:
-                    merged = self._build_lot_stats_for_emit(stats_info, is_strip_finished=False)
-                    self._update_statistics_signal.emit(merged)
             elif trigger_camera ==0 and trigger_finished == 0:
                 self.MM.write(alias="transfer_modbus",address = 0,value_list=[0],function_code=cst.WRITE_SINGLE_COIL)
             else:
@@ -597,26 +577,6 @@ class TransferThread(QThread):
                 self.gc_counter = 0
 
         log_operation("TransferThread", "主循环退出", level=logging.INFO)
-    
-    def _build_lot_stats_for_emit(self, strip_stats: dict, is_strip_finished: bool) -> dict:
-        """构建主界面所需的 lot 级统计（与 get_statistics_info 格式一致）"""
-        total = self._lot_stats["total_count"]
-        ng = self._lot_stats["ng_count"]
-        dc = dict(self._lot_stats["defect_counts"])
-        if not is_strip_finished and strip_stats:
-            total += strip_stats.get("total_count", 0)
-            ng += strip_stats.get("ng_count", 0)
-            for k, v in (strip_stats.get("defect_counts") or {}).items():
-                dc[k] = dc.get(k, 0) + v
-        yield_rate = ((total - ng) / total * 100) if total > 0 else 0.0
-        return {
-            "station": "移栽台",
-            "lot_id": self._lot_stats.get("lot_id", "") or (strip_stats.get("lot_id", "") if strip_stats else ""),
-            "total_count": total,
-            "ng_count": ng,
-            "yield_rate": yield_rate,
-            "defect_counts": dc
-        }
     
     #——————————————————————————————检测产品函数————————————————————————————————————————————————————————————————————
     def _detect_product(self,x,y,product_image:np.ndarray):
