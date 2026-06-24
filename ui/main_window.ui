@@ -379,7 +379,7 @@
        <enum>QTabWidget::West</enum>
       </property>
       <property name="currentIndex">
-       <number>1</number>
+       <number>0</number>
       </property>
       <property name="tabsClosable">
        <bool>false</bool>
@@ -1446,6 +1446,13 @@
                   <column/>
                   <column/>
                   <column/>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QPushButton" name="pushButton_2">
+                  <property name="text">
+                   <string>回滚至上组数据</string>
+                  </property>
                  </widget>
                 </item>
                </layout>
@@ -3599,8 +3606,6 @@
    <header>widgets.zoomable_graphics_view</header>
   </customwidget>
  </customwidgets>
- <resources>
-  <include location="icons.qrc"/>
- </resources>
+ <resources/>
  <connections/>
 </ui>
