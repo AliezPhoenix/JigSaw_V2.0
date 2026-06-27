@@ -101,6 +101,46 @@ class _CameraCommon:
             return 1, f"Unsupported parameter type: {parameter_type}"
         return 0, "Success"
 
+    def Get_parameter(self, parameter_name, parameter_type=None):
+        if parameter_type is None:
+            return None
+        if parameter_type == "FloatValue":
+            st_float_param = MVCC_FLOATVALUE()
+            memset(byref(st_float_param), 0, sizeof(MVCC_FLOATVALUE))
+            ret = self.obj_cam.MV_CC_GetFloatValue(parameter_name, st_float_param)
+            if ret != 0:
+                return None
+            return st_float_param.fCurValue
+        elif parameter_type == "IntValue":
+            st_int_param = MVCC_INTVALUE()
+            memset(byref(st_int_param), 0, sizeof(MVCC_INTVALUE))
+            ret = self.obj_cam.MV_CC_GetIntValue(parameter_name, st_int_param)
+            if ret != 0:
+                return None
+            return st_int_param.nCurValue
+        elif parameter_type == "BoolValue":
+            st_bool_param = c_bool()
+            ret = self.obj_cam.MV_CC_GetBoolValue(parameter_name, st_bool_param)
+            if ret != 0:
+                return None
+            return st_bool_param.bCurValue
+        elif parameter_type == "StringValue":
+            st_string_param = MVCC_STRINGVALUE()
+            memset(byref(st_string_param), 0, sizeof(MVCC_STRINGVALUE))
+            ret = self.obj_cam.MV_CC_GetStringValue(parameter_name, st_string_param)
+            if ret != 0:
+                return None
+            return st_string_param.sCurValue
+        elif parameter_type == "EnumValue":
+            st_enum_param = MVCC_ENUMVALUE()
+            memset(byref(st_enum_param), 0, sizeof(MVCC_ENUMVALUE))
+            ret = self.obj_cam.MV_CC_GetEnumValue(parameter_name, st_enum_param)
+            if ret != 0:
+                return None
+            return st_enum_param.nCurValue
+        else:
+            return None
+
 
 class CameraController(_CameraCommon):
 
@@ -240,18 +280,9 @@ class CameraController(_CameraCommon):
                 if ret != 0:
                     print('show error','set triggersoftware fail! ret = '+self.To_hex_str(ret))
 
-    def Get_parameter(self,parameter_type = None):
-        st_float_param = MVCC_FLOATVALUE()
-        memset(byref(st_float_param), 0, sizeof(MVCC_FLOATVALUE))
+    def Get_parameter(self,parameter_name, parameter_type = None):
+        return super().Get_parameter(parameter_name, parameter_type)
 
-        if parameter_type is None or not self.b_open_device:
-            return None  # 直接返回 None 表示失败
-
-        ret = self.obj_cam.MV_CC_GetFloatValue(parameter_type, st_float_param)
-        if ret != 0:
-            print(f"获取 {parameter_type} 失败，ret = {ret}")
-            return None
-        return st_float_param.fCurValue
 
     def Get_current_user_set(self):
         """获取当前使用的用户集
@@ -427,11 +458,11 @@ class CameraController(_CameraCommon):
 
 
 class LineScanCamera(_CameraCommon):
-    def __init__(self,obj_cam,netIp,deviceIp,device_index=0,b_open_device=False,b_start_grabbing = False,h_thread_handle=None,\
+    def __init__(self,obj_cam:MvCamera,netIp,deviceIp,device_index=0,b_open_device=False,b_start_grabbing = False,h_thread_handle=None,\
                 b_thread_closed=False,st_frame_info=None,b_exit=False,b_save_bmp=False,b_save_jpg=False,buf_save_image=None,\
                 n_save_image_size=0,n_win_gui_id=0,frame_rate=0,exposure_time=0,gain=0):
 
-        self.obj_cam:MvCamera= obj_cam
+        self.obj_cam = obj_cam
         self.b_open_device = b_open_device
         self.device_index = device_index
         self.netIp = netIp
@@ -485,6 +516,7 @@ class LineScanCamera(_CameraCommon):
             self.b_open_device = True
             self.b_thread_closed = False
             return 0,"Success"
+    
     def Close_device(self):
         if False == self.b_open_device:
             return 1, "device not open!"
@@ -521,18 +553,8 @@ class LineScanCamera(_CameraCommon):
             return 0, "Success"
         return 0, "Success"
 
-    def Get_parameter(self, parameter_type=None):
-        st_float_param = MVCC_FLOATVALUE()
-        memset(byref(st_float_param), 0, sizeof(MVCC_FLOATVALUE))
-
-        if parameter_type is None or not self.b_open_device:
-            return None
-
-        ret = self.obj_cam.MV_CC_GetFloatValue(parameter_type, st_float_param)
-        if ret != 0:
-            print(f"获取 {parameter_type} 失败，ret = {ret}")
-            return None
-        return st_float_param.fCurValue
+    def Get_parameter(self, parameter_name, parameter_type=None):
+        return super().Get_parameter(parameter_name, parameter_type)
 
     def Get_image(self):
         self.st_frame_info = MV_FRAME_OUT()
@@ -571,6 +593,7 @@ class LineScanCamera(_CameraCommon):
             return 0, 0
 
     def Save_to_user_set(self, user_set_index=None):
+
         if not self.b_open_device:
             return 1, "设备未打开"
         try:

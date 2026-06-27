@@ -528,6 +528,8 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             # 生成并显示文本结果
             result_text = self._generate_result_text(product)
             self.textEdit_test_result.setPlainText(result_text)
+            self.label_current_x_mm.setText(str(round(product.size_result.width, 4))+"mm")
+            self.label_current_y_mm.setText(str(round(product.size_result.height, 4))+"mm")
             
         except Exception as e:
             QMessageBox.warning(self, "错误", f"测试运行失败: {str(e)}")

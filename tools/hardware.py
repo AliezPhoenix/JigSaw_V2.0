@@ -293,14 +293,14 @@ class Hardware_Manager:
         except Exception as e:
             return False, f"停止取流异常: {str(e)}", None
 
-    def get_parameter(self, alias: str, param_name: str) -> tuple:
+    def get_parameter(self, alias: str, param_name: str, parameter_type: str = None) -> tuple:
         """
         获取指定相机的指定参数
         
         Args:
             alias: 相机别名
             param_name: 参数名称，如 "ExposureTime", "Gain", "Gamma", "AcquisitionFrameRate"
-            
+            parameter_type: 参数类型，如 "FloatValue", "IntValue", "BoolValue", "StringValue", "EnumValue"
         Returns:
             (成功标志, 消息, 参数值)，成功时返回 (True, "参数获取成功", 参数值)
             失败时返回 (False, 错误消息, None)
@@ -314,22 +314,23 @@ class Hardware_Manager:
             return False, "相机未连接", None
 
         try:
-            value = camera.Get_parameter(param_name)
+            value = camera.Get_parameter(param_name, parameter_type)
             if value is None:
                 return False, f"参数 {param_name} 获取失败或不存在", None
             return True, "参数获取成功", value
         except Exception as e:
             return False, f"获取参数异常: {str(e)}", None
     
-    def set_parameter(self, alias: str, param_name: str, value: float) -> tuple:
+    def set_parameter(self, alias: str, param_name: str, value, parameter_type: str = None) -> tuple:
         """
         设置指定相机的指定参数
-        
+
         Args:
             alias: 相机别名
             param_name: 参数名称，如 "ExposureTime", "Gain", "Gamma", "AcquisitionFrameRate"
             value: 参数值
-            
+            parameter_type: 参数类型，如 "FloatValue", "IntValue", "BoolValue", "StringValue", "EnumValue"
+
         Returns:
             (成功标志, 消息, 结果)，成功时返回 (True, "参数设置成功", None)，失败时返回 (False, 错误消息, None)
         """
@@ -342,7 +343,10 @@ class Hardware_Manager:
             return False, "相机未连接", None
 
         try:
-            ret, msg = camera.Set_parameter(param_name, value)
+            if parameter_type is not None:
+                ret, msg = camera.Set_parameter(param_name, parameter_type, value)
+            else:
+                ret, msg = camera.Set_parameter(param_name, value)
             if ret != 0:
                 return False, f"参数设置失败: {msg}", None
             return True, "参数设置成功", None

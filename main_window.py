@@ -302,6 +302,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         if path:
             settings = QSettings("JigSaw", "JigSaw_v2")
             settings.setValue("last_config_path", path)
+    
     def _load_last_config(self):
         """静默加载上次配方，若路径存在且文件有效则加载"""
         last_path = self._get_last_config_path()
@@ -603,6 +604,8 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.pushButton_stop.setEnabled(False)
         # self.pushButton_product_prams_load.clicked.connect(self._load_config_file())
     
+        self.pushButton_show_original_dry_image.clicked.connect(self._show_original_dry)
+    
     def _on_sucker1_live_toggled(self, checked):
         """主线程槽：更新 SuckerThread1 的实时显示标志（避免工作线程访问 UI 死锁）"""
         s1 = self.thread_manager.get_thread_obj("sucker_thread_1") if self.thread_manager else None
@@ -759,13 +762,17 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
 
         if action == "read_cam_params":
             try:
-                param_names = ["ExposureTime", "Gain", "Gamma", "AcquisitionFrameRate"]
+                param_names = {"ExposureTime": "FloatValue", 
+                "LEDLightingTime": "IntValue"} if hardware_alias == "dry_cam" else {"ExposureTime":  "FloatValue", 
+                "Gain": "FloatValue", 
+                "Gamma": "FloatValue", 
+                "AcquisitionFrameRate": "FloatValue"}
                 params = {}
                 param_errors = []
                 
                 # 批量获取参数
                 for param_name in param_names:
-                    success, msg, value = self.hardware_manager.get_parameter(hardware_alias, param_name)
+                    success, msg, value = self.hardware_manager.get_parameter(hardware_alias, param_name, param_names[param_name])
                     if not success:
                         param_errors.append(f"{param_name}: {msg}")
                     else:
@@ -779,15 +786,19 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 
                 # 更新UI
                 prefix = hardware_alias.split('_')[0]
-                lineEdit_exposure = getattr(self, f"lineEdit_ExposureTime_{prefix}")
-                lineEdit_gain = getattr(self, f"lineEdit_Gain_{prefix}")
-                lineEdit_gamma = getattr(self, f"lineEdit_Gamma_{prefix}")
-                lineEdit_framerate = getattr(self, f"lineEdit_AcquisitionFrameRate_{prefix}")
-                
-                lineEdit_exposure.setText(str(round(params["ExposureTime"], 2)))
-                lineEdit_gain.setText(str(round(params["Gain"], 2)))
-                lineEdit_gamma.setText(str(round(params["Gamma"], 2)))
-                lineEdit_framerate.setText(str(round(params["AcquisitionFrameRate"], 2)))
+                if prefix == "dry":
+                    self.lineEdit_ExposureTime_dry.setText(str(round(params["ExposureTime"], 2)))
+                    self.lineEdit_LEDLightingTime_dry.setText(str(round(params["LEDLightingTime"], 2)))
+                else:
+                    lineEdit_exposure = getattr(self, f"lineEdit_ExposureTime_{prefix}")
+                    lineEdit_gain = getattr(self, f"lineEdit_Gain_{prefix}")
+                    lineEdit_gamma = getattr(self, f"lineEdit_Gamma_{prefix}")
+                    lineEdit_framerate = getattr(self, f"lineEdit_AcquisitionFrameRate_{prefix}")
+                    
+                    lineEdit_exposure.setText(str(round(params["ExposureTime"], 2)))
+                    lineEdit_gain.setText(str(round(params["Gain"], 2)))
+                    lineEdit_gamma.setText(str(round(params["Gamma"], 2)))
+                    lineEdit_framerate.setText(str(round(params["AcquisitionFrameRate"], 2)))
                 
                 QMessageBox.information(self, "成功", f"{hardware_alias}相机参数读取成功 ✅")
             except Exception as e:
@@ -795,21 +806,30 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
 
         if action == "write_cam_params":
             try:
-                params = {
-                    "ExposureTime": float(getattr(self,f"lineEdit_ExposureTime_{hardware_alias.split('_')[0]}").text()),
-                    "Gain": float(getattr(self,f"lineEdit_Gain_{hardware_alias.split('_')[0]}").text()),
-                    "Gamma": float(getattr(self,f"lineEdit_Gamma_{hardware_alias.split('_')[0]}").text()),
-                    "AcquisitionFrameRate": float(getattr(self,f"lineEdit_AcquisitionFrameRate_{hardware_alias.split('_')[0]}").text())
-                }
+                if hardware_alias == "dry_cam":
+                    params = {
+                        "ExposureTime": ("FloatValue", float(self.lineEdit_ExposureTime_dry.text())),
+                        "LEDLightingTime": ("IntValue", int(float(self.lineEdit_LEDLightingTime_dry.text()))),
+                    }
+                else:
+                    prefix = hardware_alias.split('_')[0]
+                    params = {
+                        "ExposureTime": ("FloatValue", float(getattr(self, f"lineEdit_ExposureTime_{prefix}").text())),
+                        "Gain": ("FloatValue", float(getattr(self, f"lineEdit_Gain_{prefix}").text())),
+                        "Gamma": ("FloatValue", float(getattr(self, f"lineEdit_Gamma_{prefix}").text())),
+                        "AcquisitionFrameRate": ("FloatValue", float(getattr(self, f"lineEdit_AcquisitionFrameRate_{prefix}").text())),
+                    }
                 param_errors = []
-                
+
                 # 批量设置参数
-                for param_name, param_value in params.items():
-                    success, msg, _ = self.hardware_manager.set_parameter(hardware_alias, param_name, param_value)
+                for param_name, (param_type, param_value) in params.items():
+                    success, msg, _ = self.hardware_manager.set_parameter(
+                        hardware_alias, param_name, param_value, param_type
+                    )
                     if not success:
                         param_errors.append(f"{param_name}: {msg}")
-                        
-                ## 如果有参数获取失败，显示错误并返回
+
+                # 如果有参数设置失败，显示错误并返回
                 if param_errors:
                     error_msg = "\n".join(param_errors)
                     QMessageBox.warning(self, "警告", f"设置{hardware_alias}相机参数失败：\n{error_msg}")
@@ -823,6 +843,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             except Exception as e:
                 QMessageBox.warning(self, "错误", f"设置{hardware_alias}相机参数失败：{str(e)}")
 
+            QMessageBox.information(self, "成功", f"{hardware_alias}相机参数写入成功 ✅")
         if action == "capture_one_frame":
             if hardware_alias == "dry_cam":
                 self.hardware_manager.start_grabbing(hardware_alias)
@@ -1208,6 +1229,10 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             )
             box.show()
 
+    def _show_original_dry(self):
+        image = self.selected_product_frame_image["dry"]
+        if image is not None:
+            self._update_label_from_image(self.label_current_cam_live_dry,image)
     # =============================================================================
     # 7. BGA 显示
     # =============================================================================
