@@ -14,7 +14,7 @@ class MarkDetector:
             params: 参数字典，包含以下键：
                 - min_threshold: int 二值化处理的最小阈值（手动模式）
                 - max_threshold: int 二值化处理的最大阈值
-                - mark_roi_min_areas: list[int] 与 mark_rois 等长，各 ROI 最小检出面积（像素）
+                - mark_roi_min_areas: list[int] 与 mark_rois 等长，各 ROI 白色像素数量阈值
                 - auto_threshold_factor: float 自动阈值因子，默认1.05
                 - pixel_size: float 像素尺寸（mm/pixel），默认0.001
                 - mark_detect_mode: "auto"或"manual"，默认"manual"
@@ -78,7 +78,7 @@ class MarkDetector:
     def _detect_single_roi_mark(
         self, image_gray: np.ndarray, roi_rect, min_mark_area: int
     ) -> dict:
-        """对单个 ROI 执行二值化与轮廓检测。roi_rect: [x,y,w,h]；min_mark_area 为该 ROI 最小面积。"""
+        """对单个 ROI 统计白色像素数。roi_rect: [x,y,w,h]；min_mark_area 为白色像素数量阈值。"""
         h_img, w_img = image_gray.shape[:2]
         try:
             x, y, roi_w, roi_h = (
@@ -129,34 +129,30 @@ class MarkDetector:
             image_binary_mark, cv.MORPH_OPEN, kernel
         )
 
-        contours, _ = cv.findContours(
-            image_binary_mark, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE
-        )
+        white_count = int(cv.countNonZero(image_binary_mark))
+        mark_area_mm = white_count * pixel_size * pixel_size
 
-        mark_contour = None
-        mark_area = 0.0
-
-        for contour in contours:
-            area = cv.contourArea(contour)
-            if area > min_mark_area:
-                mark_contour = contour
-                mark_area = area
-                break
-
-        if mark_contour is not None and mark_area > 0:
-            mark_contour_global = mark_contour + np.array([x, y], dtype=np.int32)
-            mark_area_mm = mark_area * pixel_size * pixel_size
+        if white_count > min_mark_area:
+            contours, _ = cv.findContours(
+                image_binary_mark, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE
+            )
+            offset = np.array([x, y], dtype=np.int32)
+            mark_contours_global = [
+                contour + offset
+                for contour in contours
+                if contour is not None and len(contour) > 0
+            ]
             return {
                 "is_valid": True,
-                "mark_contour": mark_contour_global,
-                "mark_area": float(mark_area),
+                "mark_contour": mark_contours_global,
+                "mark_area": float(white_count),
                 "mark_area_mm": float(mark_area_mm),
             }
         return {
             "is_valid": False,
             "mark_contour": None,
-            "mark_area": 0.0,
-            "mark_area_mm": 0.0,
+            "mark_area": float(white_count),
+            "mark_area_mm": float(mark_area_mm),
         }
 
     def detect(self, image):
@@ -211,11 +207,15 @@ class MarkDetector:
         else:
             is_valid = any(entry["is_valid"] for entry in per_roi)
 
-        contours_draw = [
-            entry["mark_contour"]
-            for entry in per_roi
-            if entry.get("mark_contour") is not None
-        ]
+        contours_draw = []
+        for entry in per_roi:
+            mc = entry.get("mark_contour")
+            if mc is None:
+                continue
+            if isinstance(mc, list):
+                contours_draw.extend(mc)
+            else:
+                contours_draw.append(mc)
 
         return Mark_Result(
             mark_contour=contours_draw,

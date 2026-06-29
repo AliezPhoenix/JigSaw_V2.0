@@ -898,9 +898,16 @@ def draw_detection_results(image_result: np.ndarray, product: 'data_structure.Pr
     ####mark绘制####
     if mark_result is not None:
         try:
-            for contour in (mark_result.mark_contour or []):
-                if contour is not None:
-                    cv.drawContours(image_result, [contour], -1, mark_draw_color, 3)
+            contours = mark_result.mark_contour or []
+            if contours:
+                mark_mask = np.zeros((img_h, img_w), dtype=np.uint8)
+                for contour in contours:
+                    if contour is not None:
+                        cv.drawContours(mark_mask, [contour], -1, 255, -1)
+                if cv.countNonZero(mark_mask) > 0:
+                    overlay = image_result.copy()
+                    overlay[mark_mask > 0] = mark_draw_color
+                    cv.addWeighted(overlay, 0.8, image_result, 0.2, 0, image_result)
         except Exception as e:
             error_messages.append(f"绘制Mark结果错误: {e}")
     
