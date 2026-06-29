@@ -609,6 +609,7 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
                     "mark_rois": mark_rois,
                     "mark_roi_min_areas": mark_roi_min_areas,
                     "allow_mark": self.local_params.get("allow_mark", True),
+                    "station": "transfer",
                 })
             #————————————————————————scratch参数——————————————————————
             min_threshold_scratch = self.local_params.get("min_threshold_scratch", 0)

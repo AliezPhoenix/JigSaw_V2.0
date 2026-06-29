@@ -1547,6 +1547,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "mark_rois": params.get("mark_rois", []),
             "mark_roi_min_areas": params.get("mark_roi_min_areas", []),
             "allow_mark": _allow_mark,
+            "station": station,
         })
         shift_detector = ShiftDetector()
         shift_detector.update_params({

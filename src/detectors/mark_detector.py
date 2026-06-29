@@ -20,6 +20,7 @@ class MarkDetector:
                 - mark_detect_mode: "auto"或"manual"，默认"manual"
                 - mark_rois: list[list[int]] 每项 [x, y, w, h]
                 - allow_mark: bool 聚合语义：False=干燥(OR)，True=移栽(AND)
+                - station: str 工位标识，"transfer" 时执行开运算去噪
         """
 
         self.image = None
@@ -33,6 +34,7 @@ class MarkDetector:
             "mark_detect_mode": "manual",
             "mark_rois": [],
             "allow_mark": False,
+            "station": "",
         }
         if params:
             self.update_params(params)
@@ -124,10 +126,12 @@ class MarkDetector:
                 image_gray_mark, min_threshold, max_threshold
             )
 
-        kernel = cv.getStructuringElement(cv.MORPH_RECT, (3, 3))
-        image_binary_mark = cv.morphologyEx(
-            image_binary_mark, cv.MORPH_OPEN, kernel
-        )
+        # 移栽工位：开运算去除小于结构元尺寸的孤立白点/小斑块
+        if self.params.get("station") == "transfer":
+            kernel = cv.getStructuringElement(cv.MORPH_RECT, (7, 7))
+            image_binary_mark = cv.morphologyEx(
+                image_binary_mark, cv.MORPH_OPEN, kernel
+            )
 
         white_count = int(cv.countNonZero(image_binary_mark))
         mark_area_mm = white_count * pixel_size * pixel_size
@@ -228,7 +232,9 @@ class MarkDetector:
     def update_params(self, params: dict):
         """更新检测器参数（仅接受已知键；支持 mark_rois / allow_mark / mark_roi_min_areas）。"""
         for key, value in params.items():
-            if key in self.params or key in ("mark_rois", "allow_mark", "mark_roi_min_areas"):
+            if key in self.params or key in (
+                "mark_rois", "allow_mark", "mark_roi_min_areas", "station"
+            ):
                 self.params[key] = value
         self._coerce_mark_rois()
         self._coerce_mark_roi_min_areas()

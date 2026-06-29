@@ -95,6 +95,7 @@ class DryThread(QThread):
             "mark_rois": self.params.get("mark_rois", []),
             "mark_roi_min_areas": self.params.get("mark_roi_min_areas", []),
             "allow_mark": self.params.get("allow_mark", False),
+            "station": "dry",
         }
 
         self.template_detect_params = {

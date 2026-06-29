@@ -602,6 +602,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                     "mark_rois": mark_rois,
                     "mark_roi_min_areas": mark_roi_min_areas,
                     "allow_mark": self.local_params.get("allow_mark", False),
+                    "station": "dry",
                 })
             #————————————————————————scratch参数——————————————————————
             min_threshold_scratch = self.local_params["min_threshold_scratch"]
