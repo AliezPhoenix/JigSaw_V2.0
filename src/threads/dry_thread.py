@@ -67,6 +67,7 @@ class DryThread(QThread):
             "pixel_size": self.params.get("pixel_size", 0.008823),
             "pixel_size_x": self.params.get("pixel_size_x"),
         }
+        
         self.ball_detect_params = {
             "min_threshold": self.params.get("min_threshold_ball", 0),
             "max_threshold": self.params.get("max_threshold_ball", 255),

@@ -314,7 +314,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 print(f"自动加载上次配方失败: {error_message}")
                 return
             self.config_manager.get_section("work_dry_params")
-            self._update_ui_from_config()
+            self._update_ui_from_config(apply_camera_params=True)
             self.label_13.setText(os.path.basename(last_path))
         except Exception as e:
             print(f"自动加载上次配方异常: {e}")
@@ -357,7 +357,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             return
         self._save_last_config_path(file_path)
         self.label_13.setText(os.path.basename(file_path))
-        self._update_ui_from_config()
+        self._update_ui_from_config(apply_camera_params=True)
         if self.thread_manager is not None:
             success_list = []
             for sub_station in ["dry_thread", "transfer_thread", "sucker_thread_1", "sucker_thread_2", "fulltray_thread"]:
@@ -426,6 +426,17 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             self.config_manager.set_key("work_transfer_params", "current_row", int(self.lineEdit_current_row_transfer.text()))
             self.config_manager.set_key("work_transfer_params", "pixel_size", float(self.lineEdit_pixel_size_transfer.text()))
 
+            self.config_manager.set_key("work_dry_params", "camera_params", {
+                "ExposureTime": float(self.lineEdit_ExposureTime_dry.text()),
+                "LEDLightingTime": int(float(self.lineEdit_LEDLightingTime_dry.text())),
+            })
+            self.config_manager.set_key("work_transfer_params", "camera_params", {
+                "ExposureTime": float(self.lineEdit_ExposureTime_transfer.text()),
+                "Gain": float(self.lineEdit_Gain_transfer.text()),
+                "Gamma": float(self.lineEdit_Gamma_transfer.text()),
+                "AcquisitionFrameRate": float(self.lineEdit_AcquisitionFrameRate_transfer.text()),
+            })
+
             self.config_manager.set_key("work_fulltray_params", "rows", int(self.lineEdit_fulltray_row_nums.text()))
             self.config_manager.set_key("work_fulltray_params", "cols", int(self.lineEdit_fulltray_col_nums.text()))
             self.config_manager.set_key("work_fulltray_params", "model_path", self.lineEdit_fulltray_model_path.text().strip())
@@ -467,7 +478,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         h = max(1, min(h, img_h - y))
         return [x, y, w, h]
 
-    def _update_ui_from_config(self):
+    def _update_ui_from_config(self, apply_camera_params=False):
 
         #————————————————————主界面参数上传——————————————————————————————————————————————————
         self.lineEdit_product_size_x_mm.setText(str(self.config_manager.get_key("work_dry_params","product_size")[0]))
@@ -485,6 +496,13 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.lineEdit_current_col_dry.setText(str(self.config_manager.get_key("work_dry_params","current_col")))
         self.lineEdit_current_row_dry.setText(str(self.config_manager.get_key("work_dry_params","current_row")))
         self.lineEdit_pixel_size_dry.setText(str(self.config_manager.get_key("work_dry_params","pixel_size")))
+        dry_camera_params = self.config_manager.get_key("work_dry_params", "camera_params", {})
+        self.lineEdit_ExposureTime_dry.setText(
+            str(dry_camera_params["ExposureTime"]) if dry_camera_params.get("ExposureTime") is not None else ""
+        )
+        self.lineEdit_LEDLightingTime_dry.setText(
+            str(dry_camera_params["LEDLightingTime"]) if dry_camera_params.get("LEDLightingTime") is not None else ""
+        )
         template_path_dry = self.config_manager.get_key("work_dry_params","golden_template_path")
         template_dry = cv.imread(template_path_dry)
         if template_dry is None:
@@ -498,6 +516,20 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.lineEdit_current_row_transfer.setText(str(self.config_manager.get_key("work_transfer_params","current_row")))
         self.lineEdit_mathch_threshsold_transfer.setText(str(self.config_manager.get_key("work_transfer_params","template_threshold")))
         self.lineEdit_pixel_size_transfer.setText(str(self.config_manager.get_key("work_transfer_params","pixel_size")))
+        transfer_camera_params = self.config_manager.get_key("work_transfer_params", "camera_params", {})
+        self.lineEdit_ExposureTime_transfer.setText(
+            str(transfer_camera_params["ExposureTime"]) if transfer_camera_params.get("ExposureTime") is not None else ""
+        )
+        self.lineEdit_Gain_transfer.setText(
+            str(transfer_camera_params["Gain"]) if transfer_camera_params.get("Gain") is not None else ""
+        )
+        self.lineEdit_Gamma_transfer.setText(
+            str(transfer_camera_params["Gamma"]) if transfer_camera_params.get("Gamma") is not None else ""
+        )
+        self.lineEdit_AcquisitionFrameRate_transfer.setText(
+            str(transfer_camera_params["AcquisitionFrameRate"])
+            if transfer_camera_params.get("AcquisitionFrameRate") is not None else ""
+        )
         template_path_transfer = self.config_manager.get_key("work_transfer_params","golden_template_path")
         template_transfer = cv.imread(template_path_transfer)
         if template_transfer is None:
@@ -533,15 +565,45 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             print(f"显示基础mapping图像失败: {str(e)}")
             traceback.print_exc()
 
+        if apply_camera_params:
+            for alias, section, param_types in (
+                ("dry_cam", "work_dry_params", {"ExposureTime": "FloatValue", "LEDLightingTime": "IntValue"}),
+                ("transfer_cam", "work_transfer_params", {
+                    "ExposureTime": "FloatValue",
+                    "Gain": "FloatValue",
+                    "Gamma": "FloatValue",
+                    "AcquisitionFrameRate": "FloatValue",
+                }),
+            ):
+                cam_params = self.config_manager.get_key(section, "camera_params", {})
+                if not cam_params:
+                    continue
+                if not self.connection_status["camera"].get(alias):
+                    QMessageBox.warning(self, "警告", f"{alias}未连接，跳过相机参数写入")
+                    continue
+                param_errors = []
+                for param_name, param_type in param_types.items():
+                    if param_name not in cam_params:
+                        continue
+                    param_value = int(float(cam_params[param_name])) if param_type == "IntValue" else float(cam_params[param_name])
+                    success, msg, _ = self.hardware_manager.set_parameter(alias, param_name, param_value, param_type)
+                    if not success:
+                        param_errors.append(f"{param_name}: {msg}")
+                if param_errors:
+                    QMessageBox.warning(self, "警告", f"加载配方后写入{alias}相机参数失败：\n" + "\n".join(param_errors))
+                    continue
+                success, msg, _ = self.hardware_manager.save_to_userSet(alias)
+                if not success:
+                    QMessageBox.warning(self, "警告", f"加载配方后保存{alias}相机UserSet失败：{msg}")
+
     def _update_config_from_signal(self, config_name):
         """从信号更新配置"""
-        print(config_path)
         config_path = os.path.join("./config", config_name + ".json")
         ret,error_message = self.config_manager.load(config_path)
         if not ret:
             QMessageBox.warning(self, "警告", f"加载配置文件失败: {error_message}❌")
             return
-        self._update_ui_from_config()
+        self._update_ui_from_config(apply_camera_params=True)
         self.confirm_params("all", silent=True)
     # =============================================================================
     # 3. 信号与连接
