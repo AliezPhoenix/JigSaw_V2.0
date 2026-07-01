@@ -1111,7 +1111,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
     # =============================================================================
 
     def _update_fulltray_graphics_view_from_image(self, image: np.ndarray):
-        """满盘检测图像仅显示在 graphicsView_fulltray_cam_live。"""
+        """满盘图像：参数页 graphicsView + 主界面 label_image_show_fulltray。"""
         image = ensure_bgr_u8(image, copy=True)
         h, w = image.shape[:2]
         bytes_per_line = 3 * w
@@ -1121,6 +1121,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         scene.addPixmap(pixmap)
         self.graphicsView_fulltray_cam_live.setScene(scene)
         self.graphicsView_fulltray_cam_live.fitInView(scene.sceneRect(), Qt.KeepAspectRatio)
+        self._update_label_from_image(self.label_image_show_fulltray, image)
 
     def _update_display(self, station, image, bga_strip:Bga_Strip=None):
         """各工位图像显示，统一入口"""
