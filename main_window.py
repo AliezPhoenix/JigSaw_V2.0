@@ -658,6 +658,8 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.pushButton_fulltray_set_roi.clicked.connect(lambda: self.create_search_roi("fulltray"))
         self.pushButton_fulltray_select_image.clicked.connect(lambda: self.load_current_image("fulltray"))
         self.pushButton_fulltray_test.clicked.connect(self.manual_test_fulltray)
+        self.pushButton_fulltray_label_tool.clicked.connect(self.open_fulltray_label_dialog)
+        self.pushButton_fulltray_train_model.clicked.connect(self.open_fulltray_train_dialog)
         self.radioButton_live_sucker1.toggled.connect(self._on_sucker1_live_toggled)
         self.radioButton_live_sucker2.toggled.connect(self._on_sucker2_live_toggled)
 
@@ -1830,6 +1832,35 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 params = self.config_manager.get_section("work_fulltray_params")
                 ft.update_params(params)
         QMessageBox.information(self, "提示", f"模型已选择 ✅\n{model_path}")
+
+    def _fulltray_params_snapshot(self):
+        """打开满盘 DL 对话框前同步 UI 并返回参数快照。"""
+        self._update_config_from_ui()
+        return self.config_manager.get_section("work_fulltray_params").copy()
+
+    def open_fulltray_label_dialog(self):
+        from src.fulltray_dl.cell_label_dialog import CellLabelDialog
+        try:
+            params = self._fulltray_params_snapshot()
+        except (ValueError, AttributeError) as e:
+            QMessageBox.warning(self, "参数错误", f"无法读取满盘参数: {e}")
+            return
+        dlg = CellLabelDialog(
+            parent=self,
+            params_snapshot=params,
+            get_current_fulltray_image=lambda: self.current_image.get("fulltray"),
+        )
+        dlg.exec_()
+
+    def open_fulltray_train_dialog(self):
+        from src.fulltray_dl.train_dialog import FulltrayTrainDialog
+        try:
+            params = self._fulltray_params_snapshot()
+        except (ValueError, AttributeError) as e:
+            QMessageBox.warning(self, "参数错误", f"无法读取满盘参数: {e}")
+            return
+        dlg = FulltrayTrainDialog(parent=self, params_snapshot=params)
+        dlg.exec_()
 
     def manual_test_fulltray(self):
         """手动测试满盘检测，参考 fulltray_thread 的检测方式"""

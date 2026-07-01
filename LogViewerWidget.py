@@ -79,6 +79,7 @@ class LogViewerWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.log_dir = os.path.abspath("Log")
+        self._date_filter_active = False
         
         self.init_ui()
         self._update_folder_display()
@@ -106,7 +107,7 @@ class LogViewerWidget(QWidget):
         self.date_input.setCalendarPopup(True)
         self.date_input.setDate(QDate.currentDate())
         self.date_input.setDisplayFormat("yyyy-MM-dd")
-        self.date_input.dateChanged.connect(self.filter_logs)
+        self.date_input.dateChanged.connect(self._on_date_filter_changed)
         
         # 清除搜索按钮
         self.clear_search_btn = QPushButton("清除搜索")
@@ -227,28 +228,47 @@ class LogViewerWidget(QWidget):
         
         if self.log_list.count() > 0:
             self.log_list.setCurrentRow(0)
+        self.filter_logs()
+
+    def _on_date_filter_changed(self, _date):
+        self._date_filter_active = True
+        self.filter_logs()
     
     def filter_logs(self):
         """根据搜索条件过滤日志列表"""
-        search_text = self.search_input.text().lower()
+        search_text = self.search_input.text().lower().strip()
         search_date = self.date_input.date().toString("yyyyMMdd")
         
         for i in range(self.log_list.count()):
             item = self.log_list.item(i)
             filename = item.text().lower()
             
-            # 检查文件名是否包含搜索文本
-            text_match = search_text == "" or search_text in filename
-            
-            # 检查日期是否匹配
-            date_match = search_date in filename or search_text != ""
+            text_match = not search_text or search_text in filename
+            if search_text:
+                date_match = True
+            elif self._date_filter_active:
+                date_match = search_date in filename
+            else:
+                date_match = True
             
             item.setHidden(not (text_match and date_match))
+
+        current = self.log_list.currentItem()
+        if current is None or current.isHidden():
+            self.log_list.clearSelection()
+            for i in range(self.log_list.count()):
+                item = self.log_list.item(i)
+                if not item.isHidden():
+                    self.log_list.setCurrentRow(i)
+                    break
     
     def clear_search(self):
         """清除搜索条件"""
         self.search_input.clear()
+        self._date_filter_active = False
+        self.date_input.blockSignals(True)
         self.date_input.setDate(QDate.currentDate())
+        self.date_input.blockSignals(False)
         self.filter_logs()
     
     def on_selection_changed(self):

@@ -1,4 +1,5 @@
 from itertools import product
+import os
 import re
 from typing import Dict, List, Sequence, Union, Optional, Tuple
 
@@ -1226,12 +1227,41 @@ def resolve_product_overlay_patch(product) -> Optional[np.ndarray]:
 
 # ==================== 满盘检测深度学习模型相关函数 ====================
 
+MOBILENET_V2_PRETRAINED_FILENAME = "mobilenet_v2-b0353104.pth"
+
+
+
+def resolve_mobilenet_v2_pretrained_path() -> str:
+    """返回预训练权重绝对路径；文件不存在时抛出 FileNotFoundError。"""
+    path = "D://JIGSAW//weights//mobilenet_v2-b0353104.pth"
+    if not os.path.isfile(path):
+        raise FileNotFoundError(
+            "未找到 MobileNetV2 ImageNet 预训练权重文件。\n"
+            f"请将 {MOBILENET_V2_PRETRAINED_FILENAME} 放到:\n"
+            f"{os.path.dirname(path)}"
+        )
+    return path
+
+
+def _load_mobilenet_v2_pretrained_state(weights_path: str) -> dict:
+    state = torch.load(weights_path, map_location="cpu")
+    if isinstance(state, dict) and "state_dict" in state:
+        state = state["state_dict"]
+    if not isinstance(state, dict):
+        raise ValueError(f"无法解析预训练权重: {weights_path}")
+    return state
+
+
 class MobileNetV2ClassifierFulltray(nn.Module):
     """MobileNetV2满盘分类器"""
 
     def __init__(self, num_classes=2, pretrained=False):
         super().__init__()
-        self.backbone = models.mobilenet_v2(pretrained=pretrained)
+        self.backbone = models.mobilenet_v2(weights=None)
+        if pretrained:
+            weights_path = resolve_mobilenet_v2_pretrained_path()
+            state_dict = _load_mobilenet_v2_pretrained_state(weights_path)
+            self.backbone.load_state_dict(state_dict, strict=False)
         self.backbone.classifier = nn.Sequential(
             nn.Dropout(0.2),
             nn.Linear(self.backbone.last_channel, 128),

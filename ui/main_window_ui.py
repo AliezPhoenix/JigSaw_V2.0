@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Form implementation generated from reading ui file 'd:\DATA\JigSaw_v2.0\ui\main_window.ui'
+# Form implementation generated from reading ui file 'ui/main_window.ui'
 #
 # Created by: PyQt5 UI code generator 5.15.11
 #
@@ -1830,6 +1830,12 @@ class Ui_MainWindow(object):
         self.pushButton_fulltray_test.setSizePolicy(sizePolicy)
         self.pushButton_fulltray_test.setObjectName("pushButton_fulltray_test")
         self.gridLayout_19.addWidget(self.pushButton_fulltray_test, 12, 1, 1, 1)
+        self.pushButton_fulltray_label_tool = QtWidgets.QPushButton(self.groupBox_fulltray_params)
+        self.pushButton_fulltray_label_tool.setObjectName("pushButton_fulltray_label_tool")
+        self.gridLayout_19.addWidget(self.pushButton_fulltray_label_tool, 14, 1, 1, 1)
+        self.pushButton_fulltray_train_model = QtWidgets.QPushButton(self.groupBox_fulltray_params)
+        self.pushButton_fulltray_train_model.setObjectName("pushButton_fulltray_train_model")
+        self.gridLayout_19.addWidget(self.pushButton_fulltray_train_model, 15, 1, 1, 1)
         self.pushButton_capture_one_frame_fulltray = QtWidgets.QPushButton(self.groupBox_fulltray_params)
         self.pushButton_capture_one_frame_fulltray.setObjectName("pushButton_capture_one_frame_fulltray")
         self.gridLayout_19.addWidget(self.pushButton_capture_one_frame_fulltray, 9, 1, 1, 1)
@@ -2019,6 +2025,8 @@ class Ui_MainWindow(object):
         self.pushButton_fulltray_select_image.setText(_translate("MainWindow", "选择图片"))
         self.label_fulltray_current_model.setText(_translate("MainWindow", "未加载"))
         self.pushButton_fulltray_test.setText(_translate("MainWindow", "手动测试"))
+        self.pushButton_fulltray_label_tool.setText(_translate("MainWindow", "打开标注工具"))
+        self.pushButton_fulltray_train_model.setText(_translate("MainWindow", "训练模型"))
         self.pushButton_capture_one_frame_fulltray.setText(_translate("MainWindow", "拍照"))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.tab_3), _translate("MainWindow", "满盘参数"))
         self.actionHome.setText(_translate("MainWindow", "Home"))
