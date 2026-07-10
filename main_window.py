@@ -1593,7 +1593,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "max_threshold": params.get("max_threshold_size", 255),
             "allow_tolerance_x": params.get("product_size_tolerance_x", 0.1),
             "allow_tolerance_y": params.get("product_size_tolerance_y", 0.1),
-            "roi_width": 80,
+            "rois": params.get("size_rois"),
             "std_size": product_size,
             "pixel_size": pixel_size,
             "pixel_size_x": params.get("pixel_size_x"),

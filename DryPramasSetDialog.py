@@ -25,6 +25,10 @@ from src.support.support_funs import (
 )
 from ui.mark_roi_manage_dialog import MarkRoiManageDialog
 
+SIZE_ROI_STEP = 5
+SIZE_ROI_COLOR = (255, 255, 0)  # 青色，与 mark/ball 区分
+
+
 class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
     def __init__(self,config_manager:'ConfigManager',parent=None):
         super().__init__(parent)
@@ -41,6 +45,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         self.config_manager = config_manager
         self.local_params = self.config_manager.get_section("work_dry_params")
         self._migrate_mark_roi_min_areas()
+        self._migrate_size_rois()
 
         # 存储原始图像
         self.template_image = None  # 模板图像（用于显示，可能包含屏蔽效果，用于检测）
@@ -120,7 +125,16 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         # 划痕检测区域相关按钮
         self.pushButton_create_scratch_roi_dry.clicked.connect(lambda: self.create_roi("scratch"))
         self.pushButton_clear_scratch_roi_dry.clicked.connect(lambda:self.clear_check_roi("scratch"))
-        
+        # 尺寸四边 ROI 编辑
+        self.combo_size_roi_side.currentIndexChanged.connect(self._on_size_roi_side_changed)
+        self.btn_size_roi_up.clicked.connect(lambda: self._nudge_size_roi(dy=-SIZE_ROI_STEP))
+        self.btn_size_roi_down.clicked.connect(lambda: self._nudge_size_roi(dy=SIZE_ROI_STEP))
+        self.btn_size_roi_left.clicked.connect(lambda: self._nudge_size_roi(dx=-SIZE_ROI_STEP))
+        self.btn_size_roi_right.clicked.connect(lambda: self._nudge_size_roi(dx=SIZE_ROI_STEP))
+        self.btn_size_roi_w_inc.clicked.connect(lambda: self._nudge_size_roi(dw=SIZE_ROI_STEP))
+        self.btn_size_roi_w_dec.clicked.connect(lambda: self._nudge_size_roi(dw=-SIZE_ROI_STEP))
+        self.btn_size_roi_h_inc.clicked.connect(lambda: self._nudge_size_roi(dh=SIZE_ROI_STEP))
+        self.btn_size_roi_h_dec.clicked.connect(lambda: self._nudge_size_roi(dh=-SIZE_ROI_STEP))
 
         #——————————————————————detector实例化————————————————————
 
@@ -143,6 +157,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         self.horizontalSlider_thresh_lower_scratch.valueChanged.connect(lambda: self.auto_run_test("scratch"))
         self.horizontalSlider_thresh_upper_scratch.valueChanged.connect(lambda: self.auto_run_test("scratch"))
         
+        self._refresh_size_roi_xywh_label()
         self.is_init = True
     
     def auto_run_test(self,detect_type=None):
@@ -167,6 +182,9 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             
             # 保存原始模板图像（用于模板匹配）
             self.template_image = image.copy()
+            h, w = self.template_image.shape[:2]
+            self._ensure_size_rois_defaults(w, h)
+            self._refresh_size_roi_xywh_label()
             # 用于显示的模板图像（包含标记）
             self._update_template_display_with_markers()
             self.info_label.setText(f"已加载模板图像: {file_path}")
@@ -213,9 +231,127 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         if template is None:
             return False
         self.template_image = template.copy()
+        h, w = self.template_image.shape[:2]
+        self._ensure_size_rois_defaults(w, h)
+        self._refresh_size_roi_xywh_label()
         return True
 
+    def _serialize_size_rois(self, rois):
+        """将 size_rois 规范为可写入配方的 dict[side -> [x,y,w,h]]。"""
+        out = {}
+        for side in SizeDetector.ROI_SIDES:
+            roi = SizeDetector._normalize_roi((rois or {}).get(side))
+            out[side] = list(roi) if roi is not None else None
+        return out
 
+    def _migrate_size_rois(self):
+        """若无 size_rois，按模板图（或占位尺寸）生成默认四边矩形。"""
+        existing = self.local_params.get("size_rois")
+        if isinstance(existing, dict) and all(
+            SizeDetector._normalize_roi(existing.get(side)) is not None
+            for side in SizeDetector.ROI_SIDES
+        ):
+            self.local_params["size_rois"] = self._serialize_size_rois(existing)
+            return
+        if self.template_image is not None:
+            h, w = self.template_image.shape[:2]
+        else:
+            w, h = 1000, 1000
+        defaults = SizeDetector.default_rois(w, h)
+        self.local_params["size_rois"] = {k: list(v) for k, v in defaults.items()}
+
+    def _ensure_size_rois_defaults(self, img_w, img_h):
+        """加载模板后若 ROI 缺失/越界则重置默认，否则夹到图像内。"""
+        rois = self.local_params.get("size_rois")
+        need_reset = not isinstance(rois, dict)
+        if not need_reset:
+            for side in SizeDetector.ROI_SIDES:
+                roi = SizeDetector._normalize_roi(rois.get(side))
+                if roi is None:
+                    need_reset = True
+                    break
+                x, y, w, h = roi
+                if x < 0 or y < 0 or x + w > img_w or y + h > img_h:
+                    need_reset = True
+                    break
+        if need_reset:
+            defaults = SizeDetector.default_rois(img_w, img_h)
+            self.local_params["size_rois"] = {k: list(v) for k, v in defaults.items()}
+            return
+        clamped = {}
+        for side in SizeDetector.ROI_SIDES:
+            roi = SizeDetector._normalize_roi(rois.get(side))
+            clamped[side] = list(SizeDetector._clamp_roi_to_image(roi, img_w, img_h))
+        self.local_params["size_rois"] = clamped
+
+    def _get_current_size_roi_side(self):
+        return str(self.combo_size_roi_side.currentText()).strip().lower()
+
+    def _refresh_size_roi_xywh_label(self):
+        side = self._get_current_size_roi_side()
+        rois = self.local_params.get("size_rois") or {}
+        roi = SizeDetector._normalize_roi(rois.get(side))
+        if roi is None:
+            self.label_size_roi_xywh.setText("")
+            return
+        x, y, w, h = roi
+        self.label_size_roi_xywh.setText(f"({x},{y},{w},{h})")
+
+    def _on_size_roi_side_changed(self, *_args):
+        self._refresh_size_roi_xywh_label()
+
+    def _nudge_size_roi(self, dx=0, dy=0, dw=0, dh=0):
+        """中心平移或宽高步进（5px），夹到图像边界。"""
+        if self.template_image is None:
+            QMessageBox.warning(self, "错误", "请先加载模板图像")
+            return
+        side = self._get_current_size_roi_side()
+        if side not in SizeDetector.ROI_SIDES:
+            return
+        img_h, img_w = self.template_image.shape[:2]
+        self._ensure_size_rois_defaults(img_w, img_h)
+        rois = dict(self.local_params.get("size_rois") or {})
+        roi = SizeDetector._normalize_roi(rois.get(side))
+        if roi is None:
+            return
+        x, y, w, h = roi
+        cx = x + w / 2.0
+        cy = y + h / 2.0
+        if dx or dy:
+            cx += dx
+            cy += dy
+        if dw or dh:
+            w = max(1, w + dw)
+            h = max(1, h + dh)
+        nx = int(round(cx - w / 2.0))
+        ny = int(round(cy - h / 2.0))
+        clamped = SizeDetector._clamp_roi_to_image((nx, ny, w, h), img_w, img_h)
+        if clamped is None:
+            return
+        rois[side] = list(clamped)
+        self.local_params["size_rois"] = self._serialize_size_rois(rois)
+        self._refresh_size_roi_xywh_label()
+        self._update_template_display_with_markers()
+        if self.is_init:
+            self.auto_run_test("size")
+
+    def _draw_size_rois_on_image(self, image):
+        """在图像上绘制四边尺寸 ROI（统一青色）。"""
+        if image is None:
+            return image
+        out = ensure_bgr_u8(image, copy=True)
+        rois = self.local_params.get("size_rois") or {}
+        for side in SizeDetector.ROI_SIDES:
+            roi = SizeDetector._normalize_roi(rois.get(side))
+            if roi is None:
+                continue
+            x, y, w, h = roi
+            cv.rectangle(out, (x, y), (x + w - 1, y + h - 1), SIZE_ROI_COLOR, 3)
+            cv.putText(
+                out, side, (x + 2, max(12, y + 14)),
+                cv.FONT_HERSHEY_SIMPLEX, 0.5, SIZE_ROI_COLOR, 1, cv.LINE_AA,
+            )
+        return out
 
     def _update_template_display_with_markers(self):
         """更新模板显示，包括绘制ROI屏蔽区域和Mark检测区域"""
@@ -253,6 +389,9 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         if isinstance(scratch_roi, list) and len(scratch_roi) == 4:
             x, y, w, h = int(scratch_roi[0]), int(scratch_roi[1]), int(scratch_roi[2]), int(scratch_roi[3])
             cv.rectangle(display_image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+        # 绘制尺寸四边 ROI（统一青色）
+        display_image = self._draw_size_rois_on_image(display_image)
         
         self.display_template_image(display_image)
 
@@ -522,6 +661,9 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 image_binary = cv.inRange(template_gray,self.local_params["min_threshold_scratch"],self.local_params["max_threshold_scratch"])
 
             image_binary = ensure_bgr_u8(image_binary, copy=True)
+            if detect_type == "size":
+                image_binary = self._draw_size_rois_on_image(image_binary)
+                image_result = self._draw_size_rois_on_image(image_result)
             self.processed_image = np.vstack((image_binary, image_result))
             self.display_processed_image(self.processed_image)
             
@@ -581,7 +723,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                     "max_threshold": max_threshold_size,
                     "allow_tolerance_x": product_size_tolerance_x,
                     "allow_tolerance_y": product_size_tolerance_y,
-                    "roi_width": 80,
+                    "rois": self.local_params.get("size_rois"),
                     "std_size": (product_size[0], product_size[1]),
                     "pixel_size": pixel_size,
                     "pixel_size_x": self.local_params.get("pixel_size_x"),
@@ -813,6 +955,13 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 self.local_params["ball_search_roi"] = []
             if "scratch_roi" not in self.local_params:
                 self.local_params["scratch_roi"] = []
+            self._migrate_size_rois()
+            if self.template_image is not None:
+                h, w = self.template_image.shape[:2]
+                self._ensure_size_rois_defaults(w, h)
+            self.local_params["size_rois"] = self._serialize_size_rois(
+                self.local_params.get("size_rois")
+            )
                 
         except Exception as e:
             QMessageBox.warning(self, "错误", f"更新参数失败: {str(e)}")

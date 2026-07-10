@@ -3,6 +3,10 @@ from src.support.support_funs import ensure_gray_u8
 from src.support.data_structure import Size_Result
 
 
+# 负梯度候选：相对全局最负值的容差带（grad <= g_min + ratio*|g_min|）
+_NEG_GRAD_CANDIDATE_RATIO = 0.2
+
+
 # ==================== 辅助函数 ====================
 
 def smooth_gradient(grad, smooth_window=3):
@@ -33,14 +37,14 @@ def smooth_gradient(grad, smooth_window=3):
     
     return smoothed
 
-def calculate_subpixel_offset(grad_values, min_idx, method='parabola'):
+def calculate_subpixel_offset(grad_values, min_idx, method='linear'):
     """
     计算亚像素偏移量
     
     Args:
         grad_values: 梯度值数组
         min_idx: 最小值索引
-        method: 插值方法，'parabola'（抛物线拟合，精度高）或'linear'（线性插值，速度快）
+        method: 插值方法，'linear'（默认）或'parabola'
     
     Returns:
         亚像素偏移量（-1到1之间）
@@ -68,10 +72,56 @@ def calculate_subpixel_offset(grad_values, min_idx, method='parabola'):
     
     return 0.0
 
+
+def _is_local_min(grad, i):
+    """判断 grad[i] 是否为局部极小。"""
+    n = len(grad)
+    if n == 1:
+        return True
+    if i == 0:
+        return grad[0] <= grad[1]
+    if i == n - 1:
+        return grad[-1] <= grad[-2]
+    return grad[i] <= grad[i - 1] and grad[i] < grad[i + 1]
+
+
+def _select_neg_grad_min_index(grad, candidate_ratio=_NEG_GRAD_CANDIDATE_RATIO):
+    """
+    沿检测方向（索引从小到大）选择负梯度边界索引。
+
+    1. 以全曲线负梯度全局最小值 g_min 为参考幅值；
+    2. 收集局部极小且 grad<0、且落在 g_min 容差带内的候选；
+    3. 取检测方向上第一个候选；若无候选则回退到 g_min 所在位置。
+    """
+    grad = np.asarray(grad, dtype=np.float64)
+    n = len(grad)
+    if n == 0:
+        return None
+
+    neg_mask = grad < 0
+    if not np.any(neg_mask):
+        return int(np.argmax(np.abs(grad)))
+
+    g_min = float(np.min(grad[neg_mask]))
+    g_min_idx = int(np.argmin(np.where(neg_mask, grad, np.inf)))
+
+    # 容差带：更负或接近 g_min（例如 g_min=-10, ratio=0.2 → 上限 -8）
+    band_hi = g_min + float(candidate_ratio) * abs(g_min)
+
+    candidates = [
+        i for i in range(n)
+        if grad[i] < 0 and _is_local_min(grad, i) and grad[i] <= band_hi
+    ]
+    if candidates:
+        return int(candidates[0])
+    return g_min_idx
+
+
 def detect_boundary_subpixel(proj_curve, need_reverse=False, dx=1.0, smooth_window=3):
     """
-    检测边界点（亚像素精度）
-    检测逻辑：由产品（白）向背景（黑）进行检测，查找负梯度最小值
+    检测边界点（亚像素精度）。
+    检测逻辑：由产品（白）向背景（黑）搜索；
+    在负梯度局部极小中，取接近全局最负值的第一个候选（沿检测方向）。
     """
     if len(proj_curve) == 0:
         return None
@@ -80,16 +130,13 @@ def detect_boundary_subpixel(proj_curve, need_reverse=False, dx=1.0, smooth_wind
     grad = np.gradient(proj_curve, dx)
     if smooth_window > 1:
         grad = smooth_gradient(grad, smooth_window)
+
+    min_idx = _select_neg_grad_min_index(grad)
+    if min_idx is None:
+        return None
     
-    # 查找负梯度最小值位置（边界处应该是下降趋势）
-    grad_negative = grad.copy()
-    grad_negative[grad_negative > 0] = np.inf
-    min_idx = np.argmin(grad_negative) if np.any(grad < 0) else np.argmax(np.abs(grad))
-    
-    # 计算亚像素偏移（优先使用抛物线拟合，失败则使用线性插值）
-    offset = calculate_subpixel_offset(grad, min_idx, method='parabola')
-    if abs(offset) > 0.8:
-        offset = calculate_subpixel_offset(grad, min_idx, method='linear')
+    # 亚像素偏移：默认线性拟合
+    offset = calculate_subpixel_offset(grad, min_idx, method='linear')
     
     # 计算最终边界位置
     boundary_pos = float(min_idx + offset)
@@ -108,90 +155,153 @@ def calculate_projection_curve(roi_image, direction='horizontal'):
 # ==================== SizeDetector 类 ====================
 
 class SizeDetector:
+    ROI_SIDES = ("top", "left", "bottom", "right")
+    DEFAULT_ROI_STRIP = 80
+
     def __init__(self, params: dict = None):
         self.image = None
         self.detection_result = None  # 存储检测结果
-        
+
         # 默认参数
         self.params = {
             "min_threshold": 0,
             "max_threshold": 255,
-            "allow_tolerance_x": 0.0,  
+            "allow_tolerance_x": 0.0,
             "allow_tolerance_y": 0.0,
-            "roi_width": 50,
+            "rois": {side: None for side in self.ROI_SIDES},
             "std_size": (0.0, 0.0),  # 标准产品尺寸 (width, height) mm单位
-            "pixel_size": 0.001  # 像素尺寸（mm/pixel）
+            "pixel_size": 0.001,  # 像素尺寸（mm/pixel）
         }
         if params:
-            self.params.update(params)
-        
+            self.update_params(params)
+
+    @staticmethod
+    def default_rois(img_w: int, img_h: int, strip: int = None):
+        """按图像尺寸生成默认四边条带 ROI（自由矩形初始值）。"""
+        strip = int(strip if strip is not None else SizeDetector.DEFAULT_ROI_STRIP)
+        w = max(1, int(img_w))
+        h = max(1, int(img_h))
+        tw = max(1, min(strip, h))
+        lw = max(1, min(strip, w))
+        return {
+            "top": (0, 0, w, tw),
+            "bottom": (0, max(0, h - tw), w, tw),
+            "left": (0, 0, lw, h),
+            "right": (max(0, w - lw), 0, lw, h),
+        }
+
+    @staticmethod
+    def _normalize_roi(roi):
+        if roi is None:
+            return None
+        if isinstance(roi, dict):
+            try:
+                x, y, w, h = int(roi["x"]), int(roi["y"]), int(roi["w"]), int(roi["h"])
+            except (KeyError, TypeError, ValueError):
+                return None
+        else:
+            try:
+                if len(roi) < 4:
+                    return None
+                x, y, w, h = int(roi[0]), int(roi[1]), int(roi[2]), int(roi[3])
+            except (TypeError, ValueError):
+                return None
+        if w < 1 or h < 1:
+            return None
+        return (x, y, w, h)
+
+    @classmethod
+    def _normalize_rois(cls, rois):
+        if not isinstance(rois, dict):
+            return {side: None for side in cls.ROI_SIDES}
+        return {side: cls._normalize_roi(rois.get(side)) for side in cls.ROI_SIDES}
+
+    @staticmethod
+    def _clamp_roi_to_image(roi, img_w, img_h):
+        if roi is None:
+            return None
+        x, y, w, h = roi
+        img_w, img_h = int(img_w), int(img_h)
+        if img_w < 1 or img_h < 1:
+            return None
+        x = max(0, min(x, img_w - 1))
+        y = max(0, min(y, img_h - 1))
+        w = max(1, min(w, img_w - x))
+        h = max(1, min(h, img_h - y))
+        return (x, y, w, h)
+
+    def _validate_rois(self, img_w, img_h):
+        """四边 ROI 必须完整且可夹到图内；否则返回错误文案。"""
+        rois = self.params.get("rois") or {}
+        out = {}
+        for side in self.ROI_SIDES:
+            roi = self._normalize_roi(rois.get(side))
+            if roi is None:
+                return None, "未框选完整的四个 ROI"
+            clamped = self._clamp_roi_to_image(roi, img_w, img_h)
+            if clamped is None:
+                return None, "未框选完整的四个 ROI"
+            out[side] = clamped
+        return out, None
+
     def detect(self, image):
         """
         执行尺寸检测
-        
+
         Args:
             image: 输入的灰度图像或BGR图像
         Returns:
-            dict: 包含以下键的字典
-                - error_code: int 错误码
-                    0: OK（合格）
-                    1: NG（不合格）
-                    2: 检测失败/边界无效
-                - is_valid: bool 尺寸是否合格
-                - box_points: list 边界框坐标 [x, y, w, h]，其中 x, y 为左上角坐标，w, h 为宽度和高度（像素）
-                - width: float 产品宽度（mm）
-                - height: float 产品高度（mm）
+            Size_Result
         """
-
         image_gray = ensure_gray_u8(image, copy=True)
         self.image = image_gray
         h, w = image_gray.shape
-        
-        # 直方图均衡化
-        #image_gray = cv.equalizeHist(image_gray)
-        
+
+        rois, roi_err = self._validate_rois(w, h)
+        if roi_err is not None:
+            self.detection_result = Size_Result(
+                error_code=2, error_msg=roi_err, is_valid=False
+            )
+            return self.detection_result
+
         # 二值化
-        image_binary = cv.inRange(image_gray, self.params['min_threshold'], self.params['max_threshold'])
-        #image_binary = cv.bitwise_not(image_binary)
-        
+        image_binary = cv.inRange(
+            image_gray, self.params["min_threshold"], self.params["max_threshold"]
+        )
+
         # 默认参数：差分步长0.7，平滑窗口5
         gradient_dx = 0.7
         smooth_window = 5
-        
-        # 自适应ROI宽度：根据图像尺寸调整
-        roi_width = max(30, min(80, int(min(h, w) * 0.1)))
-        if 'roi_width' in self.params and self.params['roi_width'] > 0:
-            roi_width = self.params['roi_width']
-        
-        # 定义4个ROI区域
-        rois = {
-            'top': (0, 0, w, roi_width),
-            'bottom': (0, max(0, h - roi_width), w, roi_width),
-            'left': (0, 0, roi_width, h),
-            'right': (max(0, w - roi_width), 0, roi_width, h)
-        }
-        
+
         # 对每个ROI进行边界检测
         boundaries = {}
         for roi_name, (roi_x, roi_y, roi_w, roi_h) in rois.items():
-            roi_image = image_binary[roi_y:roi_y+roi_h, roi_x:roi_x+roi_w].copy()
-            is_horizontal = roi_name in ['top', 'bottom']
-            is_reverse = roi_name in ['top', 'left']
-            
+            roi_image = image_binary[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w].copy()
+            if roi_image.size == 0:
+                self.detection_result = Size_Result(
+                    error_code=2, error_msg=f"{roi_name}边ROI无效", is_valid=False
+                )
+                return self.detection_result
+
+            is_horizontal = roi_name in ["top", "bottom"]
+            is_reverse = roi_name in ["top", "left"]
+
             # 计算投影曲线
-            proj_curve = calculate_projection_curve(roi_image, 'horizontal' if is_horizontal else 'vertical')
-            
+            proj_curve = calculate_projection_curve(
+                roi_image, "horizontal" if is_horizontal else "vertical"
+            )
+
             # 根据搜索方向处理投影曲线
             proj_curve_for_detection = proj_curve[::-1] if is_reverse else proj_curve
-            
+
             # 检测边界
             boundary_offset = detect_boundary_subpixel(
                 proj_curve_for_detection,
                 need_reverse=is_reverse,
                 dx=gradient_dx,
-                smooth_window=smooth_window
+                smooth_window=smooth_window,
             )
-            
+
             # 转换为全局坐标
             if boundary_offset is not None:
                 if is_horizontal:
@@ -199,47 +309,50 @@ class SizeDetector:
                 else:
                     boundaries[roi_name] = float(roi_x + boundary_offset)
             else:
-                # 失败时使用ROI中间位置
-                boundaries[roi_name] = float((roi_y + roi_h // 2) if is_horizontal else (roi_x + roi_w // 2))
-        
-        top_boundary = boundaries['top']
-        bottom_boundary = boundaries['bottom']
-        left_boundary = boundaries['left']
-        right_boundary = boundaries['right']
-        
+                self.detection_result = Size_Result(
+                    error_code=2,
+                    error_msg=f"无法检测到{roi_name}边边界",
+                    is_valid=False,
+                )
+                return self.detection_result
+
+        top_boundary = boundaries["top"]
+        bottom_boundary = boundaries["bottom"]
+        left_boundary = boundaries["left"]
+        right_boundary = boundaries["right"]
+
         # 验证边界合理性：确保边界顺序正确且尺寸合理
         if right_boundary <= left_boundary or bottom_boundary <= top_boundary:
             self.detection_result = Size_Result(
                 error_code=2, error_msg="尺寸边界无效", is_valid=False
             )
             return self.detection_result
-        
+
         width_pixel = right_boundary - left_boundary
         height_pixel = bottom_boundary - top_boundary
-        
+
         x_min, y_min = float(left_boundary), float(top_boundary)
-        
+
         # 返回 x, y, w, h 格式
         box_points = [x_min, y_min, width_pixel, height_pixel]
-        
+
         # 转换为实际尺寸（mm）：宽度可用 pixel_size_x，未设置时与 pixel_size 相同
-        pixel_size = self.params.get('pixel_size', 0.001)
-        ps_x = self.params.get('pixel_size_x')
+        pixel_size = self.params.get("pixel_size", 0.001)
+        ps_x = self.params.get("pixel_size_x")
         width_scale = pixel_size if ps_x is None else ps_x
         product_width_mm = width_pixel * width_scale
         product_height_mm = height_pixel * pixel_size
-        
+
         # 判断尺寸是否合格
         is_valid = False
-        
+
         if width_pixel > 0 and height_pixel > 0:
-            std_size = self.params.get('std_size', (0.0, 0.0))
+            std_size = self.params.get("std_size", (0.0, 0.0))
             std_width, std_height = std_size
-            
+
             if std_width > 0 and std_height > 0:
-                    
-                tolerance_x = self.params.get('allow_tolerance_x', 0.0)
-                tolerance_y = self.params.get('allow_tolerance_y', 0.0)
+                tolerance_x = self.params.get("allow_tolerance_x", 0.0)
+                tolerance_y = self.params.get("allow_tolerance_y", 0.0)
 
                 # 判断是否在容差范围内
                 width_diff = abs(std_width - product_width_mm)
@@ -249,7 +362,7 @@ class SizeDetector:
             else:
                 # 没有标准尺寸，默认认为合格
                 is_valid = True
-        
+
         # 保存检测结果
         detection_result = Size_Result(
             width=product_width_mm,
@@ -264,112 +377,118 @@ class SizeDetector:
     def update_params(self, params: dict, clear_result: bool = True):
         """
         更新检测器参数
-        
+
         Args:
             params: dict 要更新的参数字典，可以包含以下键：
-                - min_threshold: int 二值化下阈值（灰度值区间下限）
-                - max_threshold: int 二值化上阈值（灰度值区间上限）
-                - allow_tolerance_x: float X方向尺寸容差（mm）
-                - allow_tolerance_y: float Y方向尺寸容差（mm）
-                - roi_width: int ROI区域宽度（像素）
-                - std_size: tuple[float, float] 标准产品尺寸 (width, height) 像素单位
-                - pixel_size: float 像素尺寸（mm/pixel）
+                - min_threshold / max_threshold
+                - allow_tolerance_x / allow_tolerance_y
+                - rois: {top/left/bottom/right: (x,y,w,h)|None}
+                - std_size / pixel_size / pixel_size_x
+                - roi_width: 旧键，忽略（兼容旧配方）
             clear_result: bool 是否清除之前的检测结果，默认为True
-        
+
         Returns:
             bool: 更新是否成功
-        
-        Example:
-            >>> detector.update_params({
-            ...     'min_threshold': 100,
-            ...     'max_threshold': 200,
-            ...     'allow_tolerance_x': 0.1,
-            ...     'pixel_size': 0.001
-            ... })
         """
-        
-        # 验证参数有效性
+        if not params:
+            return True
+
+        # 验证参数有效性（roi_width 仅兼容忽略，不参与检测）
         valid_keys = {
-            'min_threshold', 'max_threshold', 'allow_tolerance_x',
-            'allow_tolerance_y', 'roi_width', 'std_size', 'pixel_size', 'pixel_size_x',
+            "min_threshold",
+            "max_threshold",
+            "allow_tolerance_x",
+            "allow_tolerance_y",
+            "rois",
+            "std_size",
+            "pixel_size",
+            "pixel_size_x",
         }
-        
-        invalid_keys = []
-        for key in params.keys():
-            if key not in valid_keys:
-                invalid_keys.append(key)
-        
-        # 验证数值参数的有效性
+
         validation_errors = []
-        
-        if 'min_threshold' in params:
-            val = params['min_threshold']
+
+        if "min_threshold" in params:
+            val = params["min_threshold"]
             if not isinstance(val, (int, float)) or val < 0 or val > 255:
-                validation_errors.append(f"min_threshold 必须在 [0, 255] 范围内，当前值: {val}")
-        
-        if 'max_threshold' in params:
-            val = params['max_threshold']
+                validation_errors.append(
+                    f"min_threshold 必须在 [0, 255] 范围内，当前值: {val}"
+                )
+
+        if "max_threshold" in params:
+            val = params["max_threshold"]
             if not isinstance(val, (int, float)) or val < 0 or val > 255:
-                validation_errors.append(f"max_threshold 必须在 [0, 255] 范围内，当前值: {val}")
-        
-        if 'min_threshold' in params and 'max_threshold' in params:
-            if params['min_threshold'] > params['max_threshold']:
-                validation_errors.append(f"min_threshold ({params['min_threshold']}) 不能大于 max_threshold ({params['max_threshold']})")
-        
-        if 'allow_tolerance_x' in params:
-            val = params['allow_tolerance_x']
+                validation_errors.append(
+                    f"max_threshold 必须在 [0, 255] 范围内，当前值: {val}"
+                )
+
+        if "min_threshold" in params and "max_threshold" in params:
+            if params["min_threshold"] > params["max_threshold"]:
+                validation_errors.append(
+                    f"min_threshold ({params['min_threshold']}) 不能大于 max_threshold ({params['max_threshold']})"
+                )
+
+        if "allow_tolerance_x" in params:
+            val = params["allow_tolerance_x"]
             if not isinstance(val, (int, float)) or val < 0:
-                validation_errors.append(f"allow_tolerance_x 必须是非负数，当前值: {val}")
-        
-        if 'allow_tolerance_y' in params:
-            val = params['allow_tolerance_y']
+                validation_errors.append(
+                    f"allow_tolerance_x 必须是非负数，当前值: {val}"
+                )
+
+        if "allow_tolerance_y" in params:
+            val = params["allow_tolerance_y"]
             if not isinstance(val, (int, float)) or val < 0:
-                validation_errors.append(f"allow_tolerance_y 必须是非负数，当前值: {val}")
-        
-        if 'roi_width' in params:
-            val = params['roi_width']
-            if not isinstance(val, (int, float)) or val <= 0:
-                validation_errors.append(f"roi_width 必须是正数，当前值: {val}")
-        
-        if 'pixel_size' in params:
-            val = params['pixel_size']
+                validation_errors.append(
+                    f"allow_tolerance_y 必须是非负数，当前值: {val}"
+                )
+
+        if "rois" in params and params["rois"] is not None and not isinstance(params["rois"], dict):
+            validation_errors.append(f"rois 必须是字典，当前值: {params['rois']}")
+
+        if "pixel_size" in params:
+            val = params["pixel_size"]
             if not isinstance(val, (int, float)) or val <= 0:
                 validation_errors.append(f"pixel_size 必须是正数，当前值: {val}")
 
-        if 'pixel_size_x' in params and params['pixel_size_x'] is not None:
-            val = params['pixel_size_x']
+        if "pixel_size_x" in params and params["pixel_size_x"] is not None:
+            val = params["pixel_size_x"]
             if not isinstance(val, (int, float)) or val <= 0:
-                validation_errors.append(f"pixel_size_x 必须是正数或省略，当前值: {val}")
+                validation_errors.append(
+                    f"pixel_size_x 必须是正数或省略，当前值: {val}"
+                )
 
-        if 'std_size' in params:
-            val = params['std_size']
+        if "std_size" in params:
+            val = params["std_size"]
             if not isinstance(val, (tuple, list)) or len(val) != 2:
-                validation_errors.append(f"std_size 必须是长度为2的元组或列表，当前值: {val}")
+                validation_errors.append(
+                    f"std_size 必须是长度为2的元组或列表，当前值: {val}"
+                )
             elif not all(isinstance(v, (int, float)) and v >= 0 for v in val):
-                validation_errors.append(f"std_size 的元素必须是非负数，当前值: {val}")
-        
-        # 如果有验证错误，记录并返回失败
+                validation_errors.append(
+                    f"std_size 的元素必须是非负数，当前值: {val}"
+                )
+
         if validation_errors:
             error_msg = "参数验证失败:\n" + "\n".join(f"  - {err}" for err in validation_errors)
             print(error_msg)
             return False
-        
-        # 更新参数（只更新有效键）
+
         updated_keys = []
         for key in valid_keys:
             if key in params:
-                self.params[key] = params[key]
+                if key == "rois":
+                    self.params[key] = self._normalize_rois(params[key])
+                else:
+                    self.params[key] = params[key]
                 updated_keys.append(key)
-        
-        # 清除之前的检测结果（如果参数已更改）
+
         if clear_result and updated_keys:
             self.detection_result = None
         return True
-    
+
     def get_params(self):
         """
         获取当前参数
-        
+
         Returns:
             dict: 当前参数字典的副本
         """

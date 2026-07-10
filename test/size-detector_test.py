@@ -82,33 +82,15 @@ def calculate_subpixel_offset(grad_values, min_idx, method='parabola'):
 
 def detect_boundary_subpixel(proj_curve, need_reverse=False, dx=1.0, smooth_window=3):
     """
-    检测边界点（亚像素精度）
-    检测逻辑：由产品（白）向背景（黑）进行检测，查找负梯度最小值
+    检测边界点（亚像素精度）。
+    检测逻辑：由产品（白）向背景（黑）搜索；
+    在负梯度局部极小中，取接近全局最负值的第一个候选（沿检测方向）。
     """
     if len(proj_curve) == 0:
         return None
-    
-    # 计算并平滑梯度
-    grad = np.gradient(proj_curve, dx)
-    if smooth_window > 1:
-        grad = smooth_gradient(grad, smooth_window)
-    
-    # 查找负梯度最小值位置（边界处应该是下降趋势）
-    grad_negative = grad.copy()
-    grad_negative[grad_negative > 0] = np.inf
-    min_idx = np.argmin(grad_negative) if np.any(grad < 0) else np.argmax(np.abs(grad))
-    
-    # 计算亚像素偏移（优先使用抛物线拟合，失败则使用线性插值）
-    offset = calculate_subpixel_offset(grad, min_idx, method='parabola')
-    if abs(offset) > 0.8:
-        offset = calculate_subpixel_offset(grad, min_idx, method='linear')
-    
-    # 计算最终边界位置
-    boundary_pos = float(min_idx + offset)
-    if need_reverse:
-        boundary_pos = len(proj_curve) - 1 - boundary_pos
-    
-    return boundary_pos
+
+    from src.detectors.size_detector import detect_boundary_subpixel as _prod_detect
+    return _prod_detect(proj_curve, need_reverse=need_reverse, dx=dx, smooth_window=smooth_window)
 
 def calculate_projection_curve(roi_image, direction='horizontal'):
     """计算投影曲线"""
