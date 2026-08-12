@@ -208,15 +208,28 @@
              <property name="spacing">
               <number>6</number>
              </property>
-             <item row="0" column="3">
-              <widget class="QSpinBox" name="spin_thresh_lower_size">
+             <item row="0" column="1" colspan="2">
+              <widget class="QSlider" name="horizontalSlider_3">
                <property name="maximum">
                 <number>255</number>
                </property>
                <property name="value">
                 <number>125</number>
                </property>
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
               </widget>
+             </item>
+             <item row="3" column="0">
+              <widget class="QLabel" name="label_thresh_upper_size">
+               <property name="text">
+                <string>Threshold上限:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="5">
+              <widget class="QLineEdit" name="line_X_tolerance_allow"/>
              </item>
              <item row="3" column="3">
               <widget class="QSpinBox" name="spin_thresh_upper_size">
@@ -228,7 +241,92 @@
                </property>
               </widget>
              </item>
-             <item row="5" column="0" colspan="2">
+             <item row="3" column="4">
+              <widget class="QLabel" name="label_4">
+               <property name="text">
+                <string>Y方向尺寸允许偏差(±mm)</string>
+               </property>
+              </widget>
+             </item>
+             <item row="5" column="0">
+              <widget class="QLabel" name="label_size_roi_side">
+               <property name="text">
+                <string>选择ROI:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="0">
+              <widget class="QLabel" name="label_thresh_lower_size">
+               <property name="text">
+                <string>Threshold下限:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="1" colspan="2">
+              <widget class="QSlider" name="horizontalSlider_4">
+               <property name="maximum">
+                <number>255</number>
+               </property>
+               <property name="value">
+                <number>255</number>
+               </property>
+               <property name="orientation">
+                <enum>Qt::Horizontal</enum>
+               </property>
+              </widget>
+             </item>
+             <item row="5" column="1" colspan="2">
+              <widget class="QComboBox" name="combo_size_roi_side">
+               <item>
+                <property name="text">
+                 <string>top</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>left</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>bottom</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>right</string>
+                </property>
+               </item>
+              </widget>
+             </item>
+             <item row="0" column="3">
+              <widget class="QSpinBox" name="spin_thresh_lower_size">
+               <property name="maximum">
+                <number>255</number>
+               </property>
+               <property name="value">
+                <number>125</number>
+               </property>
+              </widget>
+             </item>
+             <item row="5" column="3">
+              <widget class="QLabel" name="label_size_roi_xywh">
+               <property name="text">
+                <string/>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="5">
+              <widget class="QLineEdit" name="line_Y_tolerance_allow"/>
+             </item>
+             <item row="0" column="4">
+              <widget class="QLabel" name="label_3">
+               <property name="text">
+                <string>X方向尺寸允许偏差(±mm)</string>
+               </property>
+              </widget>
+             </item>
+             <item row="6" column="0" rowspan="3" colspan="2">
               <layout class="QGridLayout" name="gridLayout_size_roi_pos">
                <property name="leftMargin">
                 <number>0</number>
@@ -275,21 +373,7 @@
                </item>
               </layout>
              </item>
-             <item row="5" column="4">
-              <widget class="QLabel" name="label_14">
-               <property name="text">
-                <string>当前检测Y</string>
-               </property>
-              </widget>
-             </item>
-             <item row="0" column="0">
-              <widget class="QLabel" name="label_thresh_lower_size">
-               <property name="text">
-                <string>Threshold下限:</string>
-               </property>
-              </widget>
-             </item>
-             <item row="5" column="2" colspan="2">
+             <item row="6" column="2" rowspan="3" colspan="2">
               <layout class="QGridLayout" name="gridLayout_size_roi_wh">
                <property name="leftMargin">
                 <number>0</number>
@@ -336,116 +420,52 @@
                </item>
               </layout>
              </item>
-             <item row="3" column="1" colspan="2">
-              <widget class="QSlider" name="horizontalSlider_4">
-               <property name="maximum">
-                <number>255</number>
-               </property>
-               <property name="value">
-                <number>255</number>
-               </property>
-               <property name="orientation">
-                <enum>Qt::Horizontal</enum>
-               </property>
-              </widget>
-             </item>
-             <item row="3" column="0">
-              <widget class="QLabel" name="label_thresh_upper_size">
+             <item row="7" column="4">
+              <widget class="QLabel" name="label_14">
                <property name="text">
-                <string>Threshold上限:</string>
+                <string>当前检测Y</string>
                </property>
               </widget>
              </item>
-             <item row="5" column="5">
+             <item row="7" column="5">
               <widget class="QLabel" name="label_current_y_mm">
                <property name="text">
                 <string/>
                </property>
               </widget>
              </item>
-             <item row="4" column="5">
-              <widget class="QLabel" name="label_current_x_mm">
-               <property name="text">
-                <string/>
-               </property>
-              </widget>
-             </item>
-             <item row="0" column="5">
-              <widget class="QLineEdit" name="line_X_tolerance_allow"/>
-             </item>
-             <item row="4" column="0">
-              <widget class="QLabel" name="label_size_roi_side">
-               <property name="text">
-                <string>选择ROI:</string>
-               </property>
-              </widget>
-             </item>
-             <item row="0" column="1" colspan="2">
-              <widget class="QSlider" name="horizontalSlider_3">
-               <property name="maximum">
-                <number>255</number>
-               </property>
-               <property name="value">
-                <number>125</number>
-               </property>
-               <property name="orientation">
-                <enum>Qt::Horizontal</enum>
-               </property>
-              </widget>
-             </item>
-             <item row="0" column="4">
-              <widget class="QLabel" name="label_3">
-               <property name="text">
-                <string>X方向尺寸允许偏差(±mm)</string>
-               </property>
-              </widget>
-             </item>
-             <item row="3" column="4">
-              <widget class="QLabel" name="label_4">
-               <property name="text">
-                <string>Y方向尺寸允许偏差(±mm)</string>
-               </property>
-              </widget>
-             </item>
-             <item row="3" column="5">
-              <widget class="QLineEdit" name="line_Y_tolerance_allow"/>
-             </item>
-             <item row="4" column="4">
+             <item row="6" column="4">
               <widget class="QLabel" name="label_13">
                <property name="text">
                 <string>当前检测X</string>
                </property>
               </widget>
              </item>
-             <item row="4" column="3">
-              <widget class="QLabel" name="label_size_roi_xywh">
+             <item row="6" column="5">
+              <widget class="QLabel" name="label_current_x_mm">
                <property name="text">
                 <string/>
                </property>
               </widget>
              </item>
-             <item row="4" column="1" colspan="2">
-              <widget class="QComboBox" name="combo_size_roi_side">
-               <item>
-                <property name="text">
-                 <string>top</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>left</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>bottom</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string>right</string>
-                </property>
-               </item>
+             <item row="5" column="4">
+              <widget class="QRadioButton" name="radioButton_inward_detect">
+               <property name="text">
+                <string>从外往内</string>
+               </property>
+               <property name="autoExclusive">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item row="5" column="5">
+              <widget class="QRadioButton" name="radioButton_outward_detect">
+               <property name="text">
+                <string>从内到外</string>
+               </property>
+               <property name="autoExclusive">
+                <bool>true</bool>
+               </property>
               </widget>
              </item>
             </layout>

@@ -727,6 +727,9 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                     "std_size": (product_size[0], product_size[1]),
                     "pixel_size": pixel_size,
                     "pixel_size_x": self.local_params.get("pixel_size_x"),
+                    "detect_direction": self.local_params.get(
+                        "size_detect_direction", "outward"
+                    ),
                 })
             
             #————————————————————————mark参数——————————————————————
@@ -800,6 +803,13 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 self.spin_thresh_upper_size.setValue(int(max_threshold_size))
                 self.horizontalSlider_3.setValue(int(min_threshold_size))
                 self.horizontalSlider_4.setValue(int(max_threshold_size))
+                direction = self.local_params.get("size_detect_direction", "outward")
+                if direction != "inward":
+                    direction = "outward"
+                if hasattr(self, "radioButton_inward_detect"):
+                    self.radioButton_inward_detect.setChecked(direction == "inward")
+                if hasattr(self, "radioButton_outward_detect"):
+                    self.radioButton_outward_detect.setChecked(direction == "outward")
                 self.spinBox_threshold_min_mark_dry.setValue(int(min_threshold_mark))
                 self.spinBox_threshold_max_mark_dry.setValue(int(max_threshold_mark))
                 self.horizontalSlider_threshold_min_mark_dry.setValue(int(min_threshold_mark))
@@ -877,6 +887,12 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 if x_text and y_text:
                     self.local_params["product_size_tolerance_x"] = float(x_text)
                     self.local_params["product_size_tolerance_y"] = float(y_text)
+
+            # 尺寸检测方向：inward radio 勾选为 inward，否则 outward（含双未选）
+            if hasattr(self, "radioButton_inward_detect") and self.radioButton_inward_detect.isChecked():
+                self.local_params["size_detect_direction"] = "inward"
+            else:
+                self.local_params["size_detect_direction"] = "outward"
             
             # Mark检测参数
             if hasattr(self, 'spinBox_threshold_min_mark_dry'):

@@ -171,9 +171,25 @@ class SizeDetector:
             "rois": {side: None for side in self.ROI_SIDES},
             "std_size": (0.0, 0.0),  # 标准产品尺寸 (width, height) mm单位
             "pixel_size": 0.001,  # 像素尺寸（mm/pixel）
+            "detect_direction": "outward",  # outward=由内向外, inward=由外向内
         }
         if params:
             self.update_params(params)
+
+    @staticmethod
+    def normalize_detect_direction(direction) -> str:
+        """将方向值归一为 outward / inward；非法或缺省为 outward。"""
+        if direction == "inward":
+            return "inward"
+        return "outward"
+
+    @staticmethod
+    def _is_reverse_for_side(roi_name: str, direction: str = "outward") -> bool:
+        """按边与检测方向决定是否翻转投影曲线（搜索起点）。"""
+        base_reverse = roi_name in ("top", "left")
+        if SizeDetector.normalize_detect_direction(direction) == "inward":
+            return not base_reverse
+        return base_reverse
 
     @staticmethod
     def default_rois(img_w: int, img_h: int, strip: int = None):
@@ -284,7 +300,9 @@ class SizeDetector:
                 return self.detection_result
 
             is_horizontal = roi_name in ["top", "bottom"]
-            is_reverse = roi_name in ["top", "left"]
+            is_reverse = self._is_reverse_for_side(
+                roi_name, self.params.get("detect_direction", "outward")
+            )
 
             # 计算投影曲线
             proj_curve = calculate_projection_curve(
@@ -384,6 +402,7 @@ class SizeDetector:
                 - allow_tolerance_x / allow_tolerance_y
                 - rois: {top/left/bottom/right: (x,y,w,h)|None}
                 - std_size / pixel_size / pixel_size_x
+                - detect_direction: "outward" | "inward"（非法值归一为 outward）
                 - roi_width: 旧键，忽略（兼容旧配方）
             clear_result: bool 是否清除之前的检测结果，默认为True
 
@@ -403,6 +422,7 @@ class SizeDetector:
             "std_size",
             "pixel_size",
             "pixel_size_x",
+            "detect_direction",
         }
 
         validation_errors = []
@@ -477,6 +497,8 @@ class SizeDetector:
             if key in params:
                 if key == "rois":
                     self.params[key] = self._normalize_rois(params[key])
+                elif key == "detect_direction":
+                    self.params[key] = self.normalize_detect_direction(params[key])
                 else:
                     self.params[key] = params[key]
                 updated_keys.append(key)
