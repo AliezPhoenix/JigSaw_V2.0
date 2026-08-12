@@ -135,6 +135,8 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         self.btn_size_roi_w_dec.clicked.connect(lambda: self._nudge_size_roi(dw=-SIZE_ROI_STEP))
         self.btn_size_roi_h_inc.clicked.connect(lambda: self._nudge_size_roi(dh=SIZE_ROI_STEP))
         self.btn_size_roi_h_dec.clicked.connect(lambda: self._nudge_size_roi(dh=-SIZE_ROI_STEP))
+        if hasattr(self, "pushButton_auto_correction"):
+            self.pushButton_auto_correction.clicked.connect(self._on_auto_pixel_size_correction)
 
         #——————————————————————detector实例化————————————————————
 
@@ -677,6 +679,87 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             QMessageBox.warning(self, "错误", f"测试运行失败: {str(e)}")
             import traceback
             traceback.print_exc()
+
+    @staticmethod
+    def _calc_pixel_sizes_from_actual(actual_x_mm, actual_y_mm, width_px, height_px):
+        """pixel_size_x = actual_x / width_px；pixel_size(Y) = actual_y / height_px。"""
+        return float(actual_x_mm) / float(width_px), float(actual_y_mm) / float(height_px)
+
+    def _resolve_loaded_config_path(self):
+        """当前已加载配方路径：优先主窗口 last_config，否则 ConfigManager 默认路径。"""
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "_get_last_config_path"):
+            path = parent._get_last_config_path()
+            if path:
+                return path
+        return getattr(self.config_manager, "config_file_path", None) or None
+
+    def _on_auto_pixel_size_correction(self):
+        """根据实测 mm 与最近一次尺寸检测像素宽高，计算并写入 pixel_size / pixel_size_x。"""
+        size_result = getattr(self.size_detector, "detection_result", None)
+        if (
+            size_result is None
+            or getattr(size_result, "error_code", 1) != 0
+            or not getattr(size_result, "box_points", None)
+            or len(size_result.box_points) < 4
+        ):
+            QMessageBox.warning(self, "提示", "请先完成尺寸检测后再进行自动补偿计算。")
+            return
+
+        width_px = float(size_result.box_points[2])
+        height_px = float(size_result.box_points[3])
+        if width_px <= 0 or height_px <= 0:
+            QMessageBox.warning(self, "提示", "请先完成尺寸检测后再进行自动补偿计算。")
+            return
+
+        try:
+            actual_x = float(self.lineEdit_actual_x_mm.text().strip())
+            actual_y = float(self.lineEdit_actual_y_mm.text().strip())
+        except (TypeError, ValueError):
+            QMessageBox.warning(self, "提示", "请填写有效的实际测量 X / Y（正数，单位 mm）。")
+            return
+        if actual_x <= 0 or actual_y <= 0:
+            QMessageBox.warning(self, "提示", "请填写有效的实际测量 X / Y（正数，单位 mm）。")
+            return
+
+        pixel_size_x, pixel_size = self._calc_pixel_sizes_from_actual(
+            actual_x, actual_y, width_px, height_px
+        )
+        # 与现有配方精度大致对齐
+        pixel_size_x = float(f"{pixel_size_x:.10g}")
+        pixel_size = float(f"{pixel_size:.10g}")
+
+        self.local_params["pixel_size_x"] = pixel_size_x
+        self.local_params["pixel_size"] = pixel_size
+        self.config_manager.set_key("work_dry_params", "pixel_size_x", pixel_size_x)
+        self.config_manager.set_key("work_dry_params", "pixel_size", pixel_size)
+
+        config_path = self._resolve_loaded_config_path()
+        if not config_path:
+            QMessageBox.warning(self, "警告", "未找到当前加载的配置文件路径，已更新内存参数但未写盘。")
+        else:
+            ok, err = self.config_manager.save(config_path)
+            if not ok:
+                QMessageBox.warning(self, "警告", f"像素尺寸已更新到内存，但写盘失败: {err}")
+                return
+
+        self.size_detector.update_params(
+            {"pixel_size": pixel_size, "pixel_size_x": pixel_size_x}
+        )
+        self.label_current_x_mm.setText(str(round(width_px * pixel_size_x, 4)) + "mm")
+        self.label_current_y_mm.setText(str(round(height_px * pixel_size, 4)) + "mm")
+
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "lineEdit_pixel_size_dry"):
+            parent.lineEdit_pixel_size_dry.setText(str(pixel_size))
+
+        QMessageBox.information(
+            self,
+            "成功",
+            f"已计算并写入像素尺寸：\n"
+            f"pixel_size_x (X) = {pixel_size_x}\n"
+            f"pixel_size (Y) = {pixel_size}",
+        )
     
     def update_params(self):
         """加载参数"""
@@ -804,12 +887,8 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 self.horizontalSlider_3.setValue(int(min_threshold_size))
                 self.horizontalSlider_4.setValue(int(max_threshold_size))
                 direction = self.local_params.get("size_detect_direction", "outward")
-                if direction != "inward":
-                    direction = "outward"
-                if hasattr(self, "radioButton_inward_detect"):
-                    self.radioButton_inward_detect.setChecked(direction == "inward")
-                if hasattr(self, "radioButton_outward_detect"):
-                    self.radioButton_outward_detect.setChecked(direction == "outward")
+                self.radioButton_inward_detect.setChecked(direction == "inward")
+                self.radioButton_outward_detect.setChecked(direction == "outward")
                 self.spinBox_threshold_min_mark_dry.setValue(int(min_threshold_mark))
                 self.spinBox_threshold_max_mark_dry.setValue(int(max_threshold_mark))
                 self.horizontalSlider_threshold_min_mark_dry.setValue(int(min_threshold_mark))

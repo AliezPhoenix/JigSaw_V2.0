@@ -117,32 +117,43 @@ def _select_neg_grad_min_index(grad, candidate_ratio=_NEG_GRAD_CANDIDATE_RATIO):
     return g_min_idx
 
 
-def detect_boundary_subpixel(proj_curve, need_reverse=False, dx=1.0, smooth_window=3):
+def detect_boundary_subpixel(
+    proj_curve,
+    need_reverse=False,
+    dx=1.0,
+    smooth_window=3,
+    edge_polarity="falling",
+):
     """
     检测边界点（亚像素精度）。
-    检测逻辑：由产品（白）向背景（黑）搜索；
-    在负梯度局部极小中，取接近全局最负值的第一个候选（沿检测方向）。
+
+    edge_polarity:
+      - "falling"：白→黑，取负梯度局部极小中接近全局最负值的第一个候选
+      - "rising"：黑→白，对梯度取反后复用同一选择逻辑（等价于正梯度局部极大）
     """
     if len(proj_curve) == 0:
         return None
-    
+
     # 计算并平滑梯度
     grad = np.gradient(proj_curve, dx)
     if smooth_window > 1:
         grad = smooth_gradient(grad, smooth_window)
 
-    min_idx = _select_neg_grad_min_index(grad)
+    # rising（黑→白）时对梯度取反，统一走负梯度选边
+    work = -grad if edge_polarity == "rising" else grad
+
+    min_idx = _select_neg_grad_min_index(work)
     if min_idx is None:
         return None
-    
+
     # 亚像素偏移：默认线性拟合
-    offset = calculate_subpixel_offset(grad, min_idx, method='linear')
-    
+    offset = calculate_subpixel_offset(work, min_idx, method="linear")
+
     # 计算最终边界位置
     boundary_pos = float(min_idx + offset)
     if need_reverse:
         boundary_pos = len(proj_curve) - 1 - boundary_pos
-    
+
     return boundary_pos
 
 def calculate_projection_curve(roi_image, direction='horizontal'):
@@ -171,7 +182,7 @@ class SizeDetector:
             "rois": {side: None for side in self.ROI_SIDES},
             "std_size": (0.0, 0.0),  # 标准产品尺寸 (width, height) mm单位
             "pixel_size": 0.001,  # 像素尺寸（mm/pixel）
-            "detect_direction": "outward",  # outward=由内向外, inward=由外向内
+            "detect_direction": "outward",  # outward=由内向外+白→黑; inward=由外向内+黑→白
         }
         if params:
             self.update_params(params)
@@ -300,9 +311,12 @@ class SizeDetector:
                 return self.detection_result
 
             is_horizontal = roi_name in ["top", "bottom"]
-            is_reverse = self._is_reverse_for_side(
-                roi_name, self.params.get("detect_direction", "outward")
+            direction = self.normalize_detect_direction(
+                self.params.get("detect_direction", "outward")
             )
+            is_reverse = self._is_reverse_for_side(roi_name, direction)
+            # inward：由外向内搜索 + 黑→白正梯度；outward：由内向外 + 白→黑负梯度
+            edge_polarity = "rising" if direction == "inward" else "falling"
 
             # 计算投影曲线
             proj_curve = calculate_projection_curve(
@@ -318,6 +332,7 @@ class SizeDetector:
                 need_reverse=is_reverse,
                 dx=gradient_dx,
                 smooth_window=smooth_window,
+                edge_polarity=edge_polarity,
             )
 
             # 转换为全局坐标
