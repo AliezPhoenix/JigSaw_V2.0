@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Form implementation generated from reading ui file 'ui/main_window.ui'
+# Form implementation generated from reading ui file 'd:\DATA\JigSaw_v2.0\ui\main_window.ui'
 #
 # Created by: PyQt5 UI code generator 5.15.11
 #
@@ -650,7 +650,7 @@ class Ui_MainWindow(object):
         self.label_statistics_lot_id.setObjectName("label_statistics_lot_id")
         self.verticalLayout_statistics.addWidget(self.label_statistics_lot_id)
         self.tableWidget_statistics = QtWidgets.QTableWidget(self.groupBox_process_summary)
-        self.tableWidget_statistics.setRowCount(10)
+        self.tableWidget_statistics.setRowCount(11)
         self.tableWidget_statistics.setColumnCount(3)
         self.tableWidget_statistics.setObjectName("tableWidget_statistics")
         self.verticalLayout_statistics.addWidget(self.tableWidget_statistics)

@@ -24,7 +24,7 @@ class SuckerDetector:
             "max_threshold_sucker": 255,
             "min_threshold_product": 150,
             "max_threshold_product": 255,
-            "min_area_sucker": 30000,
+            "min_area_sucker": 10000,
             "min_area_product": 30000,
             "pixel_size": 0.001,  # mm/pixel
         }

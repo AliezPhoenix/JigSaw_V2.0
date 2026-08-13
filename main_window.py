@@ -50,6 +50,7 @@ import traceback
 import torch
 import logging
 from src.support.operation_log import log_operation
+from src.support.data_structure import  Product
 
 
 class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
@@ -126,6 +127,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 'lot_id': '-',
                 'total_count': 0,
                 'ng_count': 0,
+                'empty_count': 0,
                 'yield_rate': 0.0,
                 'defect_counts': {'Mark': 0, 'Size': 0, 'Ball_Area': 0, 'Ball Count': 0, 'Scratch': 0, 'Shift': 0}
             },
@@ -133,6 +135,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 'lot_id': '-',
                 'total_count': 0,
                 'ng_count': 0,
+                'empty_count': 0,
                 'yield_rate': 0.0,
                 'defect_counts': {'Mark': 0, 'Size': 0, 'Ball_Area': 0, 'Ball Count': 0, 'Scratch': 0, 'Shift': 0}
             }
@@ -179,7 +182,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
     def _init_statistics_table(self):
         """初始化统计表格：设置表头、固定行标签、只读"""
         tbl = self.tableWidget_statistics
-        tbl.setRowCount(9)
+        tbl.setRowCount(11)
         tbl.setEditTriggers(tbl.NoEditTriggers)
         tbl.setAlternatingRowColors(True)
         tbl.verticalHeader().setVisible(False)
@@ -187,8 +190,11 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         # 表头
         tbl.setHorizontalHeaderLabels(["", "干燥台", "移栽台"])
         tbl.horizontalHeader().setDefaultAlignment(Qt.AlignCenter)
-        # 固定行标签（第0行为表头行，第1-9行为数据行）
-        row_labels = ["总数：", "NG数：", "X Mark：", "尺寸：", "大小球(偏移)：", "缺球：", "划伤：", "偏移：", "良率："]
+        # 行：总数、良品、NG、Empty、各缺陷、良率
+        row_labels = [
+            "总数：", "良品数：", "NG数：", "Empty：",
+            "X Mark：", "尺寸：", "大小球(偏移)：", "缺球：", "划伤：", "偏移：", "良率：",
+        ]
         for row, label in enumerate(row_labels):
             item = QTableWidgetItem(label)
             item.setFlags(item.flags() & ~Qt.ItemIsEditable)
@@ -218,6 +224,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             'lot_id': lot_id,
             'total_count': 0,
             'ng_count': 0,
+            'empty_count': 0,
             'yield_rate': 0.0,
             'defect_counts': dict(self._DEFAULT_DEFECT_COUNTS),
         }
@@ -1210,10 +1217,15 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         current_lot_id = dry['lot_id'] if dry['lot_id'] not in ('-', '') else transfer['lot_id']
         self.label_statistics_lot_id.setText(f"lot_id: {current_lot_id}")
         tbl = self.tableWidget_statistics
-        # 行0: 总数, 1: NG数, 2: Mark, 3: Size, 4: Ball_Area, 5: Ball Count, 6: Scratch, 7: Shift, 8: 良率
+        # 良品数主界面推算：ok = total - ng（与良率分子一致）
+        dry_ok = dry['total_count'] - dry['ng_count']
+        transfer_ok = transfer['total_count'] - transfer['ng_count']
+        # 行0总数, 1良品, 2NG, 3Empty, 4-9缺陷, 10良率
         rows_data = [
             (dry['total_count'], transfer['total_count']),
+            (dry_ok, transfer_ok),
             (dry['ng_count'], transfer['ng_count']),
+            (dry.get('empty_count', 0), transfer.get('empty_count', 0)),
             (dry['defect_counts'].get('Mark', 0), transfer['defect_counts'].get('Mark', 0)),
             (dry['defect_counts'].get('Size', 0), transfer['defect_counts'].get('Size', 0)),
             (dry['defect_counts'].get('Ball_Area', 0), transfer['defect_counts'].get('Ball_Area', 0)),
@@ -1227,9 +1239,11 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 item = QTableWidgetItem(str(val))
                 item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                if row == 1 and isinstance(val, int) and val > 0:  # NG数
+                if row == 1 and isinstance(val, int) and val > 0:  # 良品数
+                    item.setForeground(QBrush(Qt.green))
+                elif row == 2 and isinstance(val, int) and val > 0:  # NG数
                     item.setForeground(QBrush(Qt.red))
-                elif row == 8:  # 良率
+                elif row == 10:  # 良率
                     item.setForeground(QBrush(Qt.green))
                 tbl.setItem(row, col, item)
 
@@ -1253,6 +1267,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         cur['lot_id'] = new_lot
         cur['total_count'] += stats_info.get('total_count', 0)
         cur['ng_count'] += stats_info.get('ng_count', 0)
+        cur['empty_count'] = cur.get('empty_count', 0) + stats_info.get('empty_count', 0)
         for k, v in (stats_info.get('defect_counts') or {}).items():
             cur['defect_counts'][k] = cur['defect_counts'].get(k, 0) + v
         total = cur['total_count']
@@ -1298,6 +1313,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         image = self.selected_product_frame_image["dry"]
         if image is not None:
             self._update_label_from_image(self.label_current_cam_live_dry,image)
+        self.current_image["dry"] = image
     # =============================================================================
     # 7. BGA 显示
     # =============================================================================
@@ -1359,7 +1375,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 return
 
             row, col = int(pos_start[0]), int(pos_start[1])
-            product = bga_instance.get_product(row, col)
+            product: Product = bga_instance.get_product(row, col)
             bbox, err = self._clicked_product_bbox(product, row, col)
             if bbox is None:
                 QMessageBox.warning(self, "错误", err)
@@ -1382,6 +1398,27 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             display_image = overlay_bgr_patch(
                 cropped, resolve_product_overlay_patch(product), prod_x, prod_y
             )
+            if product.size_result.error_code == 0:
+                if product.size_result.is_valid:
+                    color = (0,255,0) # green
+                else:
+                    color = (0,0,255) #red
+                cv.rectangle(display_image,((int(prod_x + w -20), int(prod_y+h/10-80))),(int(prod_x + w*1.8), int(prod_y+h/10+250)),(0,0,0),-1)
+                cv.putText(display_image, "Size_Data", (int(prod_x + w), int(prod_y+h/10)), cv.FONT_HERSHEY_SIMPLEX, 3,color, 4)
+                cv.putText(display_image, f"W: {product.size_result.width:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 100)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
+                cv.putText(display_image, f"H: {product.size_result.height:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 200)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
+            else:
+                cv.putText(display_image, "NO SIZE", (int(prod_x+w), int(prod_y)), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+            if product.shift_result.error_code ==0:
+                if product.shift_result.is_valid:
+                    color = (0,255,0) # green
+                else:
+                    color = (0,0,255) #red
+                cv.rectangle(display_image,((int(prod_x + w -20), int(prod_y+h/10+320))),(int(prod_x + w*1.8), int(prod_y+h/10+650)),(0,0,0),-1)
+                cv.putText(display_image, "Shift_Data", (int(prod_x + w), int(prod_y+h/10+400)), cv.FONT_HERSHEY_SIMPLEX, 3,color, 4)
+                cv.putText(display_image, f"X: {product.shift_result.shift_x_mm:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 500)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
+                cv.putText(display_image, f"Y: {product.shift_result.shift_y_mm:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 600)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
+            
             label_name = getattr(self, f"label_current_cam_live_{work_position}")
             self._update_label_from_image(label_name, display_image)
         except Exception as e:
@@ -1788,13 +1825,13 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
 
     def create_search_roi(self, station):
         """创建并保存 search_roi。dry 保存网格 ROI；transfer/fulltray 保存单矩形 ROI。"""
-        image = self.current_image.get(station)
+        image = self.selected_product_frame_image.get(station)
         if image is None:
             QMessageBox.warning(self, "错误", "请先选择当前图像❌")
             return
 
         cv.namedWindow("创建 Search ROI", cv.WINDOW_NORMAL)
-        roi = selectROI("创建 Search ROI", image, showCrosshair=True, fromCenter=False, rect_color=(255, 255, 0), line_thickness=5)
+        roi = selectROI("创建 Search ROI", image, showCrosshair=True, fromCenter=False, rect_color=(255, 255, 0), line_thickness=15)
         if not roi or roi[2] <= 0 or roi[3] <= 0:
             QMessageBox.information(self, "提示", "已取消创建 Search ROI")
             return
@@ -1802,7 +1839,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.config_manager.set_key(f"work_{station}_params", "search_roi", [x, y, w, h])
         display_image = ensure_bgr_u8(image, copy=True)
         cv.putText(display_image, "Search ROI", (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 2)
-        cv.rectangle(display_image, (x, y), (x + w, y + h), (255, 255, 0), 5)
+        cv.rectangle(display_image, (x, y), (x + w, y + h), (255, 255, 0), 15)
         if station == "fulltray":
             self._update_fulltray_graphics_view_from_image(display_image)
         else:
