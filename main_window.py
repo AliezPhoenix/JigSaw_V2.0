@@ -415,6 +415,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             total_cols = int(self.lineEdit_col_nums.text())
             product_count = int(self.lineEdit_product_count.text())
             product_type = "BGA" if self.radioButton_BGA_type.isChecked() else "QFN"
+            front_back_reverse = self.radioButton_front_back_reverse.isChecked()
 
             for section in ["work_dry_params", "work_transfer_params"]:
                 self.config_manager.set_key(section, "product_size", [size_x, size_y])
@@ -422,6 +423,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 self.config_manager.set_key(section, "total_rows", total_rows)
                 self.config_manager.set_key(section, "total_cols", total_cols)
                 self.config_manager.set_key(section, "product_count", product_count)
+                self.config_manager.set_key(section, "front_back_reverse", front_back_reverse)
 
             self.config_manager.set_key("work_dry_params", "template_threshold", float(self.lineEdit_mathch_threshsold_dry.text()))
             self.config_manager.set_key("work_dry_params", "current_col", int(self.lineEdit_current_col_dry.text()))
@@ -497,6 +499,9 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.lineEdit_row_nums.setText(str(self.config_manager.get_key("work_dry_params","total_rows")))
         self.lineEdit_col_nums.setText(str(self.config_manager.get_key("work_dry_params","total_cols")))
         self.lineEdit_product_count.setText(str(self.config_manager.get_key("work_dry_params","product_count")))
+        self.radioButton_front_back_reverse.setChecked(
+            bool(self.config_manager.get_key("work_dry_params", "front_back_reverse", False))
+        )
         #————————————————————————干燥台tab页面参数上传——————————————————————————————————
 
         self.lineEdit_mathch_threshsold_dry.setText(str(self.config_manager.get_key("work_dry_params","template_threshold")))
@@ -1398,27 +1403,28 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             display_image = overlay_bgr_patch(
                 cropped, resolve_product_overlay_patch(product), prod_x, prod_y
             )
-            if product.size_result.error_code == 0:
-                if product.size_result.is_valid:
-                    color = (0,255,0) # green
+            if work_position == "dry":
+                if product.size_result.error_code == 0:
+                    if product.size_result.is_valid:
+                        color = (0,255,0) # green
+                    else:
+                        color = (0,0,255) #red
+                    cv.rectangle(display_image,((int(prod_x + w -20), int(prod_y+h/10-80))),(int(prod_x + w*1.8), int(prod_y+h/10+250)),(0,0,0),-1)
+                    cv.putText(display_image, "Size_Data", (int(prod_x + w), int(prod_y+h/10)), cv.FONT_HERSHEY_SIMPLEX, 3,color, 4)
+                    cv.putText(display_image, f"W: {product.size_result.width:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 100)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
+                    cv.putText(display_image, f"H: {product.size_result.height:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 200)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
                 else:
-                    color = (0,0,255) #red
-                cv.rectangle(display_image,((int(prod_x + w -20), int(prod_y+h/10-80))),(int(prod_x + w*1.8), int(prod_y+h/10+250)),(0,0,0),-1)
-                cv.putText(display_image, "Size_Data", (int(prod_x + w), int(prod_y+h/10)), cv.FONT_HERSHEY_SIMPLEX, 3,color, 4)
-                cv.putText(display_image, f"W: {product.size_result.width:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 100)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
-                cv.putText(display_image, f"H: {product.size_result.height:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 200)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
-            else:
-                cv.putText(display_image, "NO SIZE", (int(prod_x+w), int(prod_y)), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-            if product.shift_result.error_code ==0:
-                if product.shift_result.is_valid:
-                    color = (0,255,0) # green
-                else:
-                    color = (0,0,255) #red
-                cv.rectangle(display_image,((int(prod_x + w -20), int(prod_y+h/10+320))),(int(prod_x + w*1.8), int(prod_y+h/10+650)),(0,0,0),-1)
-                cv.putText(display_image, "Shift_Data", (int(prod_x + w), int(prod_y+h/10+400)), cv.FONT_HERSHEY_SIMPLEX, 3,color, 4)
-                cv.putText(display_image, f"X: {product.shift_result.shift_x_mm:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 500)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
-                cv.putText(display_image, f"Y: {product.shift_result.shift_y_mm:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 600)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
-            
+                    cv.putText(display_image, "NO SIZE", (int(prod_x+w), int(prod_y)), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+                if product.shift_result.error_code ==0:
+                    if product.shift_result.is_valid:
+                        color = (0,255,0) # green
+                    else:
+                        color = (0,0,255) #red
+                    cv.rectangle(display_image,((int(prod_x + w -20), int(prod_y+h/10+320))),(int(prod_x + w*1.8), int(prod_y+h/10+650)),(0,0,0),-1)
+                    cv.putText(display_image, "Shift_Data", (int(prod_x + w), int(prod_y+h/10+400)), cv.FONT_HERSHEY_SIMPLEX, 3,color, 4)
+                    cv.putText(display_image, f"X: {product.shift_result.shift_x_mm:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 500)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
+                    cv.putText(display_image, f"Y: {product.shift_result.shift_y_mm:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 600)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
+                
             label_name = getattr(self, f"label_current_cam_live_{work_position}")
             self._update_label_from_image(label_name, display_image)
         except Exception as e:

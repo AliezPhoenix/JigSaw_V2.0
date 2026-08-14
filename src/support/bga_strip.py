@@ -117,6 +117,8 @@ class BGA_STRIP:
         wcols = int(params.get("current_col", 0) or 0)
 
         start_element = 0 if strip_side == "front" else 1
+        if params.get("front_back_reverse"):
+            start_element = 1 - start_element
         base = create_alternating_array(rows, cols, start_element, (0, 99))
         # 合法格（棋盘奇偶，由 side 决定）
         self.valid_mask = (base == 99) if rows > 0 and cols > 0 else np.zeros((rows, cols), dtype=bool)
