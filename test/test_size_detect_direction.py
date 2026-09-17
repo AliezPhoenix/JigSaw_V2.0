@@ -7,7 +7,12 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.detectors.size_detector import SizeDetector, detect_boundary_subpixel
+from src.detectors.size_detector import (
+    SizeDetector,
+    compensate_box_toward_std,
+    compensation_delta_px,
+    detect_boundary_subpixel,
+)
 
 
 @pytest.mark.parametrize(
@@ -83,6 +88,54 @@ def test_detect_outward_with_default_rois_valid_box():
     assert 10 < y < 45
     assert 200 < bw < 260
     assert 120 < bh < 170
+
+
+@pytest.mark.parametrize(
+    "delta,want",
+    [
+        (0.0, 0.0),
+        (0.99, 0.0),
+        (1.0, 0.0),
+        (2.0, -0.5),
+        (3.0, -1.0),
+        (5.0, -2.0),
+        (6.0, -2.0),
+        (-2.0, 0.5),
+        (-5.0, 2.0),
+    ],
+)
+def test_compensation_delta_px_deadband_frac(delta, want):
+    assert compensation_delta_px(delta) == pytest.approx(want)
+
+
+def test_compensate_box_keeps_center_when_too_large():
+    x, y, w, h = compensate_box_toward_std(
+        10.0, 20.0, 102.0, 80.0, std_w_mm=1.0, std_h_mm=0.8, scale_x=0.01, scale_y=0.01
+    )
+    # 宽 102px vs 100px → Δ=2 → 减 0.5px，中心不变；高 Δ=0 不补
+    assert w == pytest.approx(101.5)
+    assert x == pytest.approx(10.25)
+    assert h == pytest.approx(80.0)
+    assert y == pytest.approx(20.0)
+    assert (x + w / 2) == pytest.approx(10.0 + 102.0 / 2)
+
+
+def test_compensate_box_grows_when_too_small():
+    x, y, w, h = compensate_box_toward_std(
+        10.0, 20.0, 98.0, 78.0, std_w_mm=1.0, std_h_mm=0.8, scale_x=0.01, scale_y=0.01
+    )
+    # Δw=Δh=-2 → 各加 0.5px
+    assert w == pytest.approx(98.5)
+    assert x == pytest.approx(9.75)
+    assert h == pytest.approx(78.5)
+    assert y == pytest.approx(19.75)
+
+
+def test_compensate_box_skips_without_std():
+    x, y, w, h = compensate_box_toward_std(
+        1, 2, 10, 20, std_w_mm=0.0, std_h_mm=0.0, scale_x=0.01, scale_y=0.01
+    )
+    assert (x, y, w, h) == (1.0, 2.0, 10.0, 20.0)
 
 
 def test_detect_inward_with_default_rois_valid_box():

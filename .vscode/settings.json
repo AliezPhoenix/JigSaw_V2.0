@@ -1,4 +1,10 @@
 {
   "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
-  "python.terminal.activateEnvironment": true
+  "python.terminal.activateEnvironment": true,
+  "qtForPython.uic.path": "D:\\DATA\\Python\\Scripts\\pyuic5.exe",
+  "qtForPython.uic.options": [
+    "-o",
+    "${resourceDirname}${pathSeparator}${resourceBasenameNoExtension}_ui.py"
+  ],
+  "qtForPython.designer.path": "D:\\DATA\\Python\\Lib\\site-packages\\qt5_applications\\Qt\\bin\\designer.exe"
 }
