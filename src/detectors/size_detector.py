@@ -147,7 +147,7 @@ def detect_boundary_subpixel(
         return None
 
     # 亚像素偏移：默认线性拟合
-    offset = calculate_subpixel_offset(work, min_idx, method="linear")
+    offset = calculate_subpixel_offset(work, min_idx, method="parabola")
 
     # 计算最终边界位置
     boundary_pos = float(min_idx + offset)
@@ -162,6 +162,42 @@ def calculate_projection_curve(roi_image, direction='horizontal'):
         return [np.sum(roi_image[h_idx, :]) / roi_image.shape[1] for h_idx in range(roi_image.shape[0])]
     else:  # vertical
         return [np.sum(roi_image[:, w_idx]) / roi_image.shape[0] for w_idx in range(roi_image.shape[1])]
+
+
+def compensation_delta_px(delta_px, deadband=1.0, gain=0.5, max_px=2.0):
+    """朝标准尺寸做连续补偿（加到实测像素宽/高上）。
+
+    |Δ|≤deadband 不补；超出部分补 gain·(|Δ|−deadband)，单轴限幅 max_px。
+    实测偏大（Δ>0）为负补偿，偏小为正补偿。
+    """
+    delta_px = float(delta_px)
+    ad = abs(delta_px)
+    if ad <= deadband or ad > max_px:
+        return 0.0
+    mag = gain * (ad - deadband)
+    return -mag if delta_px > 0 else mag
+
+
+def compensate_box_toward_std(x, y, w, h, std_w_mm, std_h_mm, scale_x, scale_y):
+    """对尺寸框做连续像素补偿，宽高独立，中心不变。无标准尺寸则原样返回。"""
+    x, y, w, h = float(x), float(y), float(w), float(h)
+    scale_x = float(scale_x)
+    scale_y = float(scale_y)
+    std_w_mm = float(std_w_mm or 0.0)
+    std_h_mm = float(std_h_mm or 0.0)
+
+    if std_w_mm > 0 and scale_x > 0:
+        dw = compensation_delta_px(w - std_w_mm / scale_x)
+        if w + dw > 0:
+            x -= dw / 2.0
+            w += dw
+
+    if std_h_mm > 0 and scale_y > 0:
+        dh = compensation_delta_px(h - std_h_mm / scale_y)
+        if h + dh > 0:
+            y -= dh / 2.0
+            h += dh
+    return x, y, w, h
 
 # ==================== SizeDetector 类 ====================
 
@@ -366,13 +402,23 @@ class SizeDetector:
 
         x_min, y_min = float(left_boundary), float(top_boundary)
 
-        # 返回 x, y, w, h 格式
-        box_points = [x_min, y_min, width_pixel, height_pixel]
-
-        # 转换为实际尺寸（mm）：宽度可用 pixel_size_x，未设置时与 pixel_size 相同
         pixel_size = self.params.get("pixel_size", 0.001)
         ps_x = self.params.get("pixel_size_x")
         width_scale = pixel_size if ps_x is None else ps_x
+        std_width, std_height = self.params.get("std_size", (0.0, 0.0))
+
+        x_min, y_min, width_pixel, height_pixel = compensate_box_toward_std(
+            x_min,
+            y_min,
+            width_pixel,
+            height_pixel,
+            std_width,
+            std_height,
+            width_scale,
+            pixel_size,
+        )
+
+        box_points = [x_min, y_min, width_pixel, height_pixel]
         product_width_mm = width_pixel * width_scale
         product_height_mm = height_pixel * pixel_size
 

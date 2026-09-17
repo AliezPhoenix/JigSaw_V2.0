@@ -127,6 +127,18 @@ def ensure_bgr_u8(image: np.ndarray, *, copy: bool = True) -> np.ndarray:
     return cv.cvtColor(np.ascontiguousarray(image[:, :, 0]), cv.COLOR_GRAY2BGR)
 
 
+def resolve_station_work_image(selected_frame, current_image):
+    """框选/模板测试用图：优先 BGA 点击缓存的整帧，否则 current_image（文件/拍照/检测结果）。"""
+    if selected_frame is not None:
+        return selected_frame
+    return current_image
+
+
+def should_cache_detect_display_as_current(bga_strip) -> bool:
+    """检测结果出图写入 current_image；实时预览（bga_strip is None）不覆盖已选图。"""
+    return bga_strip is not None
+
+
 def normalize_rect(start_point, end_point):
     """将拖拽端点规范化为左上角 + 宽高。"""
     x1, y1 = start_point

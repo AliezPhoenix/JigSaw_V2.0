@@ -135,9 +135,9 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         self.btn_size_roi_w_dec.clicked.connect(lambda: self._nudge_size_roi(dw=-SIZE_ROI_STEP))
         self.btn_size_roi_h_inc.clicked.connect(lambda: self._nudge_size_roi(dh=SIZE_ROI_STEP))
         self.btn_size_roi_h_dec.clicked.connect(lambda: self._nudge_size_roi(dh=-SIZE_ROI_STEP))
-        if hasattr(self, "pushButton_auto_correction"):
-            self.pushButton_auto_correction.clicked.connect(self._on_auto_pixel_size_correction)
-
+        
+        self.pushButton_auto_correction.clicked.connect(self._on_auto_pixel_size_correction)
+        self.pushButton_set_currentsize_as_std.clicked.connect(self._on_set_currentsize_as_std)
         #——————————————————————detector实例化————————————————————
 
         
@@ -760,7 +760,30 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             f"pixel_size_x (X) = {pixel_size_x}\n"
             f"pixel_size (Y) = {pixel_size}",
         )
-    
+    def _on_set_currentsize_as_std(self):
+        """将当前尺寸设置为标准尺寸"""
+        size_result = getattr(self.size_detector, "detection_result", None)
+        if (
+            size_result is None
+            or getattr(size_result, "error_code", 1) != 0
+            or float(getattr(size_result, "width", 0) or 0) <= 0
+            or float(getattr(size_result, "height", 0) or 0) <= 0
+        ):
+            QMessageBox.warning(self, "提示", "请先完成尺寸检测后再进行设置。")
+            return
+        product_size = [round(float(size_result.width),4), round(float(size_result.height),4)]
+        self.local_params["product_size"] = product_size
+        self.config_manager.set_key("work_dry_params", "product_size", product_size)
+        # 主窗口保存配方时读这两个框，必须同步，避免覆盖刚写入的标准尺寸
+        parent = self.parent()
+        if parent is not None:
+            if hasattr(parent, "lineEdit_product_size_x_mm"):
+                parent.lineEdit_product_size_x_mm.setText(str(product_size[0]))
+            if hasattr(parent, "lineEdit_product_size_y_mm"):
+                parent.lineEdit_product_size_y_mm.setText(str(product_size[1]))
+        QMessageBox.information(self, "成功", "已将当前尺寸设置为标准尺寸")
+        self.update_params()
+
     def update_params(self):
         """加载参数"""
         if self.config_manager is None:

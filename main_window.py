@@ -27,6 +27,8 @@ from src.support.support_funs import (
     fulltray_predict_single_image,
     ensure_gray_u8,
     ensure_bgr_u8,
+    resolve_station_work_image,
+    should_cache_detect_display_as_current,
     assign_matches_to_grid,
     normalize_grid_search_roi,
     is_flat_roi,
@@ -1146,6 +1148,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         elif station == "dry":
             if image is not None and isinstance(image, np.ndarray):
                 try:
+                    self._cache_detect_display_as_current("dry", image, bga_strip)
                     if bga_strip is None:
                         self._update_label_from_image(self.label_current_cam_live_dry, image)
                         self._update_label_from_image(self.label_image_show_dry, image)
@@ -1158,6 +1161,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         elif station == "transfer":
             if image is not None and isinstance(image, np.ndarray):
                 try:
+                    self._cache_detect_display_as_current("transfer", image, bga_strip)
                     if bga_strip is None:
                         self._update_label_from_image(self.label_current_cam_live_transfer, image)
                         self._update_label_from_image(self.label_image_show_transfer, image)
@@ -1333,11 +1337,21 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         return getattr(label, "bga", None)
 
     def _get_station_work_image(self, station):
-        """模板测试/参数同步用图：优先 BGA 点击缓存的整帧，否则 current_image。"""
-        frame = self.selected_product_frame_image.get(station)
-        if frame is not None:
-            return frame
-        return self.current_image.get(station)
+        """模板测试/参数同步/框选 ROI 用图：优先 BGA 点击缓存的整帧，否则 current_image。"""
+        return resolve_station_work_image(
+            self.selected_product_frame_image.get(station),
+            self.current_image.get(station),
+        )
+
+    def _cache_detect_display_as_current(self, station, image, bga_strip):
+        """自动流程检测结果写入 current_image，供框选检测区域回退使用。"""
+        if not should_cache_detect_display_as_current(bga_strip):
+            return
+        if station not in self.current_image:
+            return
+        if image is None or not isinstance(image, np.ndarray):
+            return
+        self.current_image[station] = ensure_bgr_u8(image, copy=True)
 
     def _clear_selected_product_frame(self, station):
         if station in self.selected_product_frame_image:
@@ -1831,9 +1845,9 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
 
     def create_search_roi(self, station):
         """创建并保存 search_roi。dry 保存网格 ROI；transfer/fulltray 保存单矩形 ROI。"""
-        image = self.selected_product_frame_image.get(station)
+        image = self._get_station_work_image(station)
         if image is None:
-            QMessageBox.warning(self, "错误", "请先选择当前图像❌")
+            QMessageBox.warning(self, "错误", "请先选择当前图像、拍照，或等待自动流程出图❌")
             return
 
         cv.namedWindow("创建 Search ROI", cv.WINDOW_NORMAL)

@@ -353,6 +353,12 @@ class FulltrayThread(QThread):
             if config_changed_flag == 100 and config_changed_flag_last == 0:
                 config_name = self.MM.read(alias="fulltray_modbus", address=4, count=20, function_code=cst.READ_INPUT_REGISTERS)
                 config_name = hex_to_string(config_name)
+                log_operation(
+                    "FulltrayThread",
+                    "配方更换通知",
+                    level=logging.INFO,
+                    recipe_name=config_name,
+                )
                 self._update_config_changed_signal.emit(config_name)
 
             
