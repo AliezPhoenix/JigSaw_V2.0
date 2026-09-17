@@ -218,10 +218,18 @@ class SizeDetector:
             "rois": {side: None for side in self.ROI_SIDES},
             "std_size": (0.0, 0.0),  # 标准产品尺寸 (width, height) mm单位
             "pixel_size": 0.001,  # 像素尺寸（mm/pixel）
-            "detect_direction": "outward",  # outward=由内向外+白→黑; inward=由外向内+黑→白
+            "detect_direction": "outward",  # outward=从内到外; inward=从外往内
+            "algorithm": "hybrid",  # hybrid=Dry 混合算法; legacy=Transfer 旧投影
         }
+        self.last_debug = {}
         if params:
             self.update_params(params)
+
+    @staticmethod
+    def normalize_algorithm(algorithm) -> str:
+        if algorithm in ("legacy", "projection", "transfer"):
+            return "legacy"
+        return "hybrid"
 
     @staticmethod
     def normalize_detect_direction(direction) -> str:
@@ -307,17 +315,27 @@ class SizeDetector:
             out[side] = clamped
         return out, None
 
-    def detect(self, image):
-        """
-        执行尺寸检测
+    def _fail(self, message, debug=None):
+        self.last_debug = debug or {}
+        self.detection_result = Size_Result(
+            error_code=2, error_msg=message, is_valid=False
+        )
+        return self.detection_result
 
-        Args:
-            image: 输入的灰度图像或BGR图像
-        Returns:
-            Size_Result
+    def detect(self, image):
+        """执行尺寸检测。Dry 默认 hybrid；Transfer 传 algorithm=legacy。"""
+        if self.normalize_algorithm(self.params.get("algorithm")) == "legacy":
+            return self._detect_projection(image)
+        from src.detectors.size_hybrid import detect_hybrid
+        return detect_hybrid(self, image)
+
+    def _detect_projection(self, image):
+        """
+        Transfer 旧算法：二值投影 + 梯度抛物线 + 向标准值回拉。
         """
         image_gray = ensure_gray_u8(image, copy=True)
         self.image = image_gray
+        self.last_debug = {}
         h, w = image_gray.shape
 
         rois, roi_err = self._validate_rois(w, h)
@@ -464,6 +482,7 @@ class SizeDetector:
                 - rois: {top/left/bottom/right: (x,y,w,h)|None}
                 - std_size / pixel_size / pixel_size_x
                 - detect_direction: "outward" | "inward"（非法值归一为 outward）
+                - algorithm: "hybrid"（Dry）| "legacy"（Transfer 旧投影）
                 - roi_width: 旧键，忽略（兼容旧配方）
             clear_result: bool 是否清除之前的检测结果，默认为True
 
@@ -484,6 +503,7 @@ class SizeDetector:
             "pixel_size",
             "pixel_size_x",
             "detect_direction",
+            "algorithm",
         }
 
         validation_errors = []
@@ -560,12 +580,15 @@ class SizeDetector:
                     self.params[key] = self._normalize_rois(params[key])
                 elif key == "detect_direction":
                     self.params[key] = self.normalize_detect_direction(params[key])
+                elif key == "algorithm":
+                    self.params[key] = self.normalize_algorithm(params[key])
                 else:
                     self.params[key] = params[key]
                 updated_keys.append(key)
 
         if clear_result and updated_keys:
             self.detection_result = None
+            self.last_debug = {}
         return True
 
     def get_params(self):

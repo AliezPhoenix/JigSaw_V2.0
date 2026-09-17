@@ -1655,6 +1655,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "pixel_size": pixel_size,
             "pixel_size_x": params.get("pixel_size_x"),
             "detect_direction": params.get("size_detect_direction", "outward"),
+            "algorithm": "legacy" if station != "dry" else "hybrid",
         })
         mark_detector = MarkDetector()
         _allow_mark = (

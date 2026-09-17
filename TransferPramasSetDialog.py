@@ -591,6 +591,7 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
                     "std_size": (product_size[0], product_size[1]),
                     "pixel_size": pixel_size,
                     "pixel_size_x": self.local_params.get("pixel_size_x"),
+                    "algorithm": "legacy",
                 })
             
             #————————————————————————mark参数——————————————————————

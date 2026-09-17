@@ -1,9 +1,18 @@
 """优化尺寸检测人工测试脚本。
 
 本文件不修改生产 SizeDetector。优化管线：
-  原始灰度/高位深图 → 可选暗场与平场校正 → 多扫描线局部灰度归一化
-  → Logistic ESF 亚像素边缘拟合 → 鲁棒直线拟合 → 四边尺寸计算
+  原始灰度/高位深图 → 可选暗场与平场校正 → 极性自动判别
+  → 梯度候选共识直线（Consensus）→ 约束窗口内亮升沿 50% 亚像素定位（Refine）
+  → 鲁棒直线拟合 → 四边尺寸计算
   → 独立线性量具标定（不按标准尺寸逐件回拉）。
+
+边缘判据：产品内侧暗环最低点与外侧第一段亮平台的中点（亮升沿 50%）。
+该判据相对其它判据存在约 6 µm 的固定偏移，由 calibration_x/y 吸收。
+
+调试人员只需调整两个参数：
+  roi_strip   ROI 搜索深度（px）。只决定能否找到边，不影响测量值。
+  sensitivity 边缘灵敏度 0~100。50 为验证过的工作点；调高只会增加拒检，
+              调低会放宽门限并可能接受劣质边缘。
 
 运行：
   python test/size_detector_test.py [图像或目录]
@@ -17,7 +26,6 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from functools import lru_cache
 from pathlib import Path
 
 import cv2 as cv
@@ -31,10 +39,21 @@ from src.detectors.size_detector import SizeDetector  # noqa: E402
 from src.support.data_structure import Size_Result  # noqa: E402
 
 
+# 边缘搜索窗几何：内侧只需覆盖暗环，外侧必须够深以在离焦时仍触及亮平台。
+INNER_SPAN = 10
+OUTER_SPAN = 20
+# 精修阶段允许偏离共识直线的最大距离（px）。
+GUIDE_BAND = 6.0
+# 剖面沿深度方向的高斯平滑，稳定梯度峰与宽度测量。
+SMOOTH_SIGMA = 1.0
+# 判据电平估计所用的额外平滑，消除“噪声最小值”统计偏差。
+LEVEL_SIGMA = 1.6
+
+
 # ==================== 灰度与平场校正 ====================
 
 def to_gray_float(image):
-    """转为 float64 灰度图，保留 8/10/12/16 bit 的原始灰度级。"""
+    """转为 float32 灰度图，保留 8/10/12/16 bit 的原始灰度级。"""
     if image is None:
         raise TypeError("输入图像为空")
 
@@ -54,12 +73,12 @@ def to_gray_float(image):
     else:
         raise ValueError(f"不支持的图像维度: {image.shape}")
 
-    return np.ascontiguousarray(gray, dtype=np.float64)
+    return np.ascontiguousarray(gray, dtype=np.float32)
 
 
 def apply_flat_field(image_gray, dark_reference=None, flat_reference=None):
     """执行暗场/平场校正；无参考图时原样返回。"""
-    work = np.asarray(image_gray, dtype=np.float64)
+    work = np.asarray(image_gray, dtype=np.float32)
 
     if dark_reference is None and flat_reference is None:
         return work
@@ -94,246 +113,42 @@ def apply_flat_field(image_gray, dark_reference=None, flat_reference=None):
     return corrected
 
 
-def gaussian_smooth_1d(values, sigma=1.0):
-    """一维零相位高斯平滑。"""
-    values = np.asarray(values, dtype=np.float64)
-    sigma = float(sigma)
-    if values.size < 3 or sigma <= 0:
-        return values.copy()
-
-    kernel_size = max(3, int(np.ceil(sigma * 6.0)) | 1)
-    max_kernel = values.size if values.size % 2 == 1 else values.size - 1
-    kernel_size = min(kernel_size, max_kernel)
-    if kernel_size < 3:
-        return values.copy()
-
-    smoothed = cv.GaussianBlur(
-        values.reshape(-1, 1),
-        (1, kernel_size),
-        sigmaX=0,
-        sigmaY=sigma,
-        borderType=cv.BORDER_REFLECT_101,
-    )
-    return smoothed.reshape(-1)
+def image_dynamic_range(work):
+    """抽稀网格上的 p1~p99 灰度跨度，比全图 percentile 快一个数量级。"""
+    sample = work[::3, ::3].ravel()
+    q_low, q_high = np.percentile(sample, [1.0, 99.0])
+    return float(q_high - q_low)
 
 
-# ==================== 单扫描线 ESF 亚像素拟合 ====================
+# ==================== 灵敏度映射 ====================
 
-def _local_maxima(values, start_idx, end_idx):
-    """返回指定区间内的局部极大值索引。"""
-    out = []
-    for idx in range(max(1, start_idx), min(len(values) - 1, end_idx)):
-        if values[idx] >= values[idx - 1] and values[idx] > values[idx + 1]:
-            out.append(idx)
-    return out
-
-
-@lru_cache(maxsize=64)
-def _logistic_esf_templates(
-    fit_radius,
-    max_transition_width,
-    edge_polarity,
-):
-    """缓存固定窗口的 Logistic ESF 模板，避免每条扫描线重复生成。"""
-    x_relative = np.arange(-fit_radius, fit_radius + 1, dtype=np.float64)
-    center_offsets = np.tile(np.linspace(-1.25, 1.25, 31), 12)
-    max_scale = max(0.12, float(max_transition_width) / 4.394449)
-    min_scale = min(0.30, max_scale)
-    scale_grid = np.repeat(np.linspace(min_scale, max_scale, 12), 31)
-    z = np.clip(
-        (x_relative[:, None] - center_offsets[None, :])
-        / scale_grid[None, :],
-        -30.0,
-        30.0,
-    )
-    rising = 1.0 / (1.0 + np.exp(-z))
-    edge_basis = rising if edge_polarity == "rising" else 1.0 - rising
-
-    baseline = np.column_stack([np.ones_like(x_relative), x_relative])
-    baseline_pinv = np.linalg.pinv(baseline)
-    basis_residual = edge_basis - baseline @ (baseline_pinv @ edge_basis)
-    denominator = np.sum(basis_residual * basis_residual, axis=0)
-    transition_widths = 4.394449 * scale_grid
-    return {
-        "x_relative": x_relative,
-        "center_offsets": center_offsets,
-        "edge_basis": edge_basis,
-        "baseline": baseline,
-        "baseline_pinv": baseline_pinv,
-        "basis_residual": basis_residual,
-        "denominator": denominator,
-        "transition_widths": transition_widths,
-    }
+# sensitivity=0 宽松 / 50 工作点 / 100 严格。工作点由 19 张实测图的门限扫描
+# 确定：该点通过 16/19 且无粗差，再放宽 max_line_rmse 即出现粗差。
+_SENSITIVITY_TABLE = {
+    "min_contrast_ratio": (0.12, 0.30, 0.50),
+    "max_edge_width": (12.0, 7.0, 4.5),
+    "min_profile_success_ratio": (0.20, 0.35, 0.55),
+    "min_line_inlier_ratio": (0.20, 0.35, 0.60),
+    "max_line_rmse": (1.00, 0.60, 0.35),
+    "min_line_inlier_span_ratio": (0.50, 0.70, 0.85),
+    "robust_sigma": (3.5, 2.8, 2.2),
+    "max_outlier_distance": (2.5, 1.5, 1.0),
+}
 
 
-def _fit_logistic_esf(
-    profile_norm,
-    coarse_idx,
-    edge_polarity,
-    fit_radius,
-    max_transition_width,
-):
-    """在粗边缘附近网格搜索 Logistic ESF，返回最佳亚像素拟合。"""
-    fit_radius = max(4, int(fit_radius))
-    start = max(0, int(coarse_idx) - fit_radius)
-    end = min(len(profile_norm), int(coarse_idx) + fit_radius + 1)
-    if end - start < 9:
-        return None
-
-    y = np.asarray(profile_norm[start:end], dtype=np.float64)
-    templates = _logistic_esf_templates(
-        fit_radius,
-        round(float(max_transition_width), 6),
-        edge_polarity,
-    )
-    if len(y) != len(templates["x_relative"]):
-        return None
-
-    baseline = templates["baseline"]
-    baseline_pinv = templates["baseline_pinv"]
-    y_residual = y - baseline @ (baseline_pinv @ y)
-    denominator = templates["denominator"]
-    numerator = templates["basis_residual"].T @ y_residual
-    amplitudes = np.divide(
-        numerator,
-        denominator,
-        out=np.full_like(numerator, np.nan),
-        where=denominator > 1e-12,
-    )
-    residual_sse = np.sum(y_residual * y_residual) - np.divide(
-        numerator * numerator,
-        denominator,
-        out=np.zeros_like(numerator),
-        where=denominator > 1e-12,
-    )
-    residual_sse = np.maximum(residual_sse, 0.0)
-    rmse = np.sqrt(residual_sse / len(y))
-    normalized_rmse = np.divide(
-        rmse,
-        amplitudes,
-        out=np.full_like(rmse, np.inf),
-        where=amplitudes > 0,
-    )
-    transition_widths = templates["transition_widths"]
-    scores = normalized_rmse + transition_widths * 1e-4
-    scores[~np.isfinite(scores)] = np.inf
-
-    best_idx = int(np.argmin(scores))
-    if not np.isfinite(scores[best_idx]):
-        return None
-
-    best_basis = templates["edge_basis"][:, best_idx]
-    amplitude = float(amplitudes[best_idx])
-    baseline_coeff = baseline_pinv @ (y - amplitude * best_basis)
-    fitted = baseline @ baseline_coeff + amplitude * best_basis
-    x = float(coarse_idx) + templates["x_relative"]
-    return {
-        "score": float(scores[best_idx]),
-        "center": float(
-            coarse_idx + templates["center_offsets"][best_idx]
-        ),
-        "amplitude": amplitude,
-        "normalized_rmse": float(normalized_rmse[best_idx]),
-        "transition_width": float(transition_widths[best_idx]),
-        "fit_x": x,
-        "fit_y": fitted,
-    }
+def sensitivity_to_gates(sensitivity):
+    """把 0~100 的灵敏度插值成一整套质量门限。"""
+    s = float(np.clip(sensitivity, 0.0, 100.0))
+    gates = {}
+    for key, (low, mid, high) in _SENSITIVITY_TABLE.items():
+        if s <= 50.0:
+            gates[key] = low + (mid - low) * (s / 50.0)
+        else:
+            gates[key] = mid + (high - mid) * ((s - 50.0) / 50.0)
+    return gates
 
 
-def fit_edge_profile(
-    profile,
-    need_reverse,
-    edge_polarity,
-    global_dynamic,
-    params,
-):
-    """单条扫描线灰度边缘拟合，成功返回亚像素位置及质量信息。"""
-    profile = np.asarray(profile, dtype=np.float64)
-    if profile.size < 12 or not np.all(np.isfinite(profile)):
-        return None
-
-    oriented = profile[::-1] if need_reverse else profile.copy()
-    q_low, q_high = np.percentile(oriented, [5.0, 95.0])
-    local_dynamic = float(q_high - q_low)
-    if local_dynamic <= 1e-9:
-        return None
-
-    profile_norm = (oriented - q_low) / local_dynamic
-    smoothed = gaussian_smooth_1d(
-        profile_norm, params.get("smooth_sigma", 1.0)
-    )
-    gradient = np.gradient(smoothed)
-    work_gradient = gradient if edge_polarity == "rising" else -gradient
-
-    fit_radius = int(params.get("fit_radius", 8))
-    margin = max(3, fit_radius)
-    if len(work_gradient) <= margin * 2 + 1:
-        return None
-
-    valid_gradient = work_gradient[margin:len(work_gradient) - margin]
-    max_strength = float(np.max(valid_gradient))
-    if max_strength <= 1e-9:
-        return None
-
-    candidates = _local_maxima(
-        work_gradient, margin, len(work_gradient) - margin
-    )
-    candidate_ratio = float(params.get("candidate_strength_ratio", 0.45))
-    candidates = [
-        idx for idx in candidates
-        if work_gradient[idx] >= max_strength * candidate_ratio
-    ]
-    direction = SizeDetector.normalize_detect_direction(
-        params.get("detect_direction", "outward")
-    )
-    candidates.sort(reverse=direction == "outward")
-    max_candidates = max(1, int(params.get("max_candidates", 4)))
-
-    min_contrast_ratio = float(params.get("min_contrast_ratio", 0.12))
-    max_profile_rmse = float(params.get("max_profile_rmse", 0.12))
-    max_transition_width = float(params.get("max_transition_width", 12.0))
-
-    for coarse_idx in candidates[:max_candidates]:
-        fit = _fit_logistic_esf(
-            profile_norm,
-            coarse_idx,
-            edge_polarity,
-            fit_radius,
-            max_transition_width,
-        )
-        if fit is None:
-            continue
-
-        contrast_value = fit["amplitude"] * local_dynamic
-        contrast_ratio = contrast_value / max(float(global_dynamic), 1e-9)
-        if contrast_ratio < min_contrast_ratio:
-            continue
-        if fit["normalized_rmse"] > max_profile_rmse:
-            continue
-        if fit["transition_width"] > max_transition_width:
-            continue
-
-        oriented_position = float(fit["center"])
-        original_position = (
-            len(profile) - 1 - oriented_position
-            if need_reverse else oriented_position
-        )
-        return {
-            "position": float(original_position),
-            "oriented_position": oriented_position,
-            "contrast_ratio": float(contrast_ratio),
-            "profile_rmse": float(fit["normalized_rmse"]),
-            "transition_width": float(fit["transition_width"]),
-            "profile": profile_norm,
-            "smoothed": smoothed,
-            "fit_x": fit["fit_x"],
-            "fit_y": fit["fit_y"],
-        }
-
-    return None
-
-
-# ==================== 多扫描线与鲁棒直线拟合 ====================
+# ==================== 极性与剖面 ====================
 
 def normalize_edge_polarity(edge_polarity):
     """将边缘极性归一为 auto / rising / falling。"""
@@ -342,139 +157,197 @@ def normalize_edge_polarity(edge_polarity):
     return "auto"
 
 
+def oriented_profiles(work, roi, roi_name, direction, scan_step,
+                      average_half_width, smooth_sigma=SMOOTH_SIGMA):
+    """取出单边 ROI 的定向剖面矩阵 (扫描线数, 深度)，深度索引 0 为产品内侧。
+
+    沿边长方向做箱式平均抑制随机噪声，沿深度方向做零相位高斯平滑稳定梯度峰
+    与 10-90% 宽度的测量；两者都不移动对称边缘的中心位置。
+    """
+    roi_x, roi_y, roi_w, roi_h = roi
+    sub = np.ascontiguousarray(work[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w])
+    is_horizontal = roi_name in ("top", "bottom")
+
+    if average_half_width > 0:
+        kernel = 2 * int(average_half_width) + 1
+        sub = cv.blur(sub, (kernel, 1) if is_horizontal else (1, kernel))
+
+    profiles = np.ascontiguousarray(sub.T) if is_horizontal else sub
+    if SizeDetector._is_reverse_for_side(roi_name, direction):
+        profiles = np.ascontiguousarray(profiles[:, ::-1])
+    profiles = np.ascontiguousarray(profiles[::max(1, int(scan_step))])
+    if smooth_sigma > 0:
+        profiles = cv.GaussianBlur(
+            profiles, (0, 0), sigmaX=float(smooth_sigma), sigmaY=0,
+            borderType=cv.BORDER_REFLECT_101,
+        )
+    return profiles, is_horizontal
+
+
 def estimate_edge_polarity(work, rois, direction, params):
-    """根据四边二维一致性梯度，自动判断产品外轮廓的灰度极性。"""
-    configured = normalize_edge_polarity(
-        params.get("edge_polarity", "auto")
-    )
+    """比较四边 ROI 内侧与外侧四分之一的平均灰度，判断产品外轮廓极性。"""
+    configured = normalize_edge_polarity(params.get("edge_polarity", "auto"))
     if configured != "auto":
         return configured, {}
 
-    scores = {"rising": 0.0, "falling": 0.0}
-    smooth_sigma = max(0.01, float(params.get("smooth_sigma", 1.0)))
-    average_half_width = max(
-        0.01,
-        float(params.get("profile_average_half_width", 3)),
-    )
-    fit_radius = max(4, int(params.get("fit_radius", 8)))
-
+    rising_score = 0.0
     for roi_name, roi in rois.items():
-        roi_x, roi_y, roi_w, roi_h = roi
-        roi_image = work[
-            roi_y:roi_y + roi_h,
-            roi_x:roi_x + roi_w,
-        ]
-        is_horizontal = roi_name in ("top", "bottom")
-        blurred = cv.GaussianBlur(
-            roi_image,
-            (0, 0),
-            sigmaX=average_half_width if is_horizontal else smooth_sigma,
-            sigmaY=smooth_sigma if is_horizontal else average_half_width,
-            borderType=cv.BORDER_REFLECT_101,
+        profiles, _ = oriented_profiles(
+            work, roi, roi_name, direction, 8, 0, smooth_sigma=0.0
         )
-        depth_axis = 0 if is_horizontal else 1
-        cross_axis = 1 if is_horizontal else 0
-        gradient = np.gradient(blurred, axis=depth_axis)
-
-        need_reverse = SizeDetector._is_reverse_for_side(
-            roi_name,
-            direction,
+        quarter = max(2, profiles.shape[1] // 4)
+        rising_score += float(
+            profiles[:, -quarter:].mean() - profiles[:, :quarter].mean()
         )
-        if need_reverse:
-            gradient = -np.flip(gradient, axis=depth_axis)
 
-        rising_score = np.percentile(
-            np.maximum(gradient, 0.0),
-            75.0,
-            axis=cross_axis,
+    selected = "rising" if rising_score >= 0.0 else "falling"
+    return selected, {"rising_score": rising_score}
+
+
+# ==================== 共识定位与亚像素精修 ====================
+
+def _consensus_guide(profiles_signed, margin):
+    """由各扫描线的最强梯度位置拟合共识直线，作为精修阶段的搜索中心。
+
+    中位数对不足半数扫描线的错误锁定免疫；随后两轮直线拟合把倾斜也吃掉。
+    """
+    gradient = np.diff(profiles_signed, axis=1)
+    depth = profiles_signed.shape[1]
+    peak = (
+        np.argmax(gradient[:, margin:depth - margin], axis=1) + margin
+    ).astype(np.float64)
+
+    median_peak = float(np.median(peak))
+    mad = float(np.median(np.abs(peak - median_peak)))
+    tolerance = max(3.0, 3.0 * 1.4826 * mad)
+    rows = np.arange(len(peak), dtype=np.float64)
+
+    keep = np.abs(peak - median_peak) <= tolerance
+    if np.count_nonzero(keep) < 8:
+        return np.full(len(peak), median_peak)
+
+    guide = np.polyval(np.polyfit(rows[keep], peak[keep], 1), rows)
+    keep = np.abs(peak - guide) <= tolerance
+    if np.count_nonzero(keep) >= 8:
+        guide = np.polyval(np.polyfit(rows[keep], peak[keep], 1), rows)
+    return guide
+
+
+def _plateau_offset(aggregate, inner_span, outer_span):
+    """从跨扫描线的中位剖面找出上升沿结束、进入亮平台的偏移量。"""
+    span = float(np.median(aggregate[-max(3, outer_span // 3):])
+                 - aggregate[:inner_span + 1].min())
+    if not np.isfinite(span) or span <= 1e-9:
+        return None
+    threshold = aggregate[:inner_span + 1].min() + 0.98 * span
+    tail = aggregate[inner_span:] >= threshold
+    reached = int(np.argmax(tail)) if tail.any() else outer_span
+    return int(np.clip(reached + 2, 4, outer_span - 2))
+
+
+def locate_rise50_edges(profiles, edge_polarity, global_dynamic, gates):
+    """两阶段单边边缘定位，返回亚像素位置与逐扫描线质量。"""
+    signed = profiles if edge_polarity == "rising" else -profiles
+    n_scan, depth = signed.shape
+    margin = max(INNER_SPAN, OUTER_SPAN) + 2
+    if depth - 2 * margin < 3:
+        return None, "ROI 搜索深度不足"
+
+    guide = _consensus_guide(signed, margin)
+    base = np.clip(
+        np.rint(guide).astype(np.int64), INNER_SPAN, depth - OUTER_SPAN - 1
+    )
+    offsets = np.arange(-INNER_SPAN, OUTER_SPAN + 1)
+    window = np.ascontiguousarray(
+        np.take_along_axis(signed, base[:, None] + offsets[None, :], axis=1),
+        dtype=np.float32,
+    )
+    smoothed = cv.GaussianBlur(
+        window, (0, 0), sigmaX=LEVEL_SIGMA, sigmaY=0,
+        borderType=cv.BORDER_REFLECT_101,
+    )
+
+    plateau = _plateau_offset(
+        np.median(smoothed, axis=0).astype(np.float64), INNER_SPAN, OUTER_SPAN
+    )
+    if plateau is None:
+        return None, "边缘对比度不足"
+
+    window = window.astype(np.float64)
+    smoothed = smoothed.astype(np.float64)
+    bright = np.median(smoothed[:, INNER_SPAN + plateau:], axis=1)
+
+    # 暗环最低点：抛物线顶点细化，避免“噪声最小值”把电平压低
+    inner = smoothed[:, :INNER_SPAN + 1]
+    trough_idx = np.argmin(inner, axis=1)
+    center = np.clip(trough_idx, 1, INNER_SPAN - 1)
+    left = np.take_along_axis(inner, (center - 1)[:, None], 1)[:, 0]
+    middle = np.take_along_axis(inner, center[:, None], 1)[:, 0]
+    right = np.take_along_axis(inner, (center + 1)[:, None], 1)[:, 0]
+    curvature = left - 2.0 * middle + right
+    shift = np.clip(
+        np.divide(
+            0.5 * (left - right), curvature,
+            out=np.zeros_like(curvature), where=np.abs(curvature) > 1e-12,
+        ),
+        -1.0, 1.0,
+    )
+    dark = middle - 0.25 * (left - right) * shift
+
+    contrast = bright - dark
+    usable = np.isfinite(contrast) & (contrast > 1e-9)
+    columns = np.arange(window.shape[1])[None, :]
+    search_from = trough_idx[:, None]
+
+    def crossing(level):
+        reached = (window >= level[:, None]) & (columns >= search_from)
+        any_reached = reached.any(axis=1)
+        index = np.clip(np.argmax(reached, axis=1), 1, window.shape[1] - 1)
+        upper = np.take_along_axis(window, index[:, None], 1)[:, 0]
+        lower = np.take_along_axis(window, (index - 1)[:, None], 1)[:, 0]
+        delta = upper - lower
+        fraction = np.divide(
+            level - lower, delta,
+            out=np.zeros_like(delta), where=np.abs(delta) > 1e-12,
         )
-        falling_score = np.percentile(
-            np.maximum(-gradient, 0.0),
-            75.0,
-            axis=cross_axis,
+        return np.where(
+            any_reached, index - 1 + np.clip(fraction, 0.0, 1.0), np.nan
         )
-        if len(rising_score) <= fit_radius * 2 + 1:
-            continue
-        valid = slice(fit_radius, len(rising_score) - fit_radius)
-        scores["rising"] += float(np.max(rising_score[valid]))
-        scores["falling"] += float(np.max(falling_score[valid]))
 
-    selected = max(scores, key=scores.get)
-    return selected, scores
+    cross50 = crossing(dark + 0.50 * contrast)
+    cross10 = crossing(dark + 0.10 * contrast)
+    cross90 = crossing(dark + 0.90 * contrast)
 
+    position = base - INNER_SPAN + cross50
+    edge_width = cross90 - cross10
+    contrast_ratio = contrast / max(float(global_dynamic), 1e-9)
 
-def collect_edge_points(
-    roi_image,
-    roi,
-    roi_name,
-    direction,
-    edge_polarity,
-    global_dynamic,
-    params,
-):
-    """在单边 ROI 中采集多条扫描线并拟合亚像素边缘点。"""
-    roi_x, roi_y, roi_w, roi_h = roi
-    is_horizontal = roi_name in ("top", "bottom")
-    need_reverse = SizeDetector._is_reverse_for_side(roi_name, direction)
-
-    scan_step = max(1, int(params.get("scan_step", 4)))
-    average_half_width = max(0, int(params.get("profile_average_half_width", 1)))
-    cross_length = roi_w if is_horizontal else roi_h
-    start = average_half_width
-    stop = cross_length - average_half_width
-
-    points = []
-    representative = None
-    center_cross = cross_length / 2.0
-    attempted = 0
-
-    for cross_idx in range(start, stop, scan_step):
-        attempted += 1
-        if is_horizontal:
-            x0 = max(0, cross_idx - average_half_width)
-            x1 = min(roi_w, cross_idx + average_half_width + 1)
-            profile = np.mean(roi_image[:, x0:x1], axis=1)
-        else:
-            y0 = max(0, cross_idx - average_half_width)
-            y1 = min(roi_h, cross_idx + average_half_width + 1)
-            profile = np.mean(roi_image[y0:y1, :], axis=0)
-
-        fit = fit_edge_profile(
-            profile,
-            need_reverse,
-            edge_polarity,
-            global_dynamic,
-            params,
-        )
-        if fit is None:
-            continue
-
-        if is_horizontal:
-            point = (float(roi_x + cross_idx), float(roi_y + fit["position"]))
-        else:
-            point = (float(roi_x + fit["position"]), float(roi_y + cross_idx))
-        points.append(point)
-
-        if (
-            representative is None
-            or abs(cross_idx - center_cross)
-            < abs(representative["cross_idx"] - center_cross)
-        ):
-            representative = dict(fit)
-            representative["cross_idx"] = int(cross_idx)
+    accepted = (
+        usable
+        & np.isfinite(position)
+        & np.isfinite(edge_width)
+        & (np.abs(position - guide) <= GUIDE_BAND)
+        & (contrast_ratio >= float(gates["min_contrast_ratio"]))
+        & (edge_width <= float(gates["max_edge_width"]))
+    )
 
     return {
-        "roi": tuple(int(v) for v in roi),
-        "is_horizontal": is_horizontal,
-        "need_reverse": need_reverse,
-        "edge_polarity": edge_polarity,
-        "attempted": int(attempted),
-        "points": np.asarray(points, dtype=np.float64).reshape(-1, 2),
-        "representative": representative,
-    }
+        "position": position,
+        "contrast_ratio": contrast_ratio,
+        "edge_width": edge_width,
+        "accepted": accepted,
+        "guide": guide,
+        "window": window,
+        "smoothed": smoothed,
+        "dark": dark,
+        "bright": bright,
+        "plateau": plateau,
+    }, None
 
 
-def robust_fit_edge_line(points, is_horizontal, params):
+# ==================== 鲁棒直线拟合 ====================
+
+def robust_fit_edge_line(points, is_horizontal, gates):
     """迭代 MAD 剔除离群点，拟合 y=ax+b 或 x=ay+b。"""
     points = np.asarray(points, dtype=np.float64)
     if len(points) < 2:
@@ -483,8 +356,8 @@ def robust_fit_edge_line(points, is_horizontal, params):
     independent = points[:, 0] if is_horizontal else points[:, 1]
     dependent = points[:, 1] if is_horizontal else points[:, 0]
     mask = np.ones(len(points), dtype=bool)
-    robust_sigma = float(params.get("robust_sigma", 2.8))
-    max_outlier_distance = float(params.get("max_outlier_distance", 2.0))
+    robust_sigma = float(gates.get("robust_sigma", 2.8))
+    max_outlier_distance = float(gates.get("max_outlier_distance", 1.5))
 
     coeff = None
     for _ in range(6):
@@ -496,8 +369,7 @@ def robust_fit_edge_line(points, is_horizontal, params):
         mad = float(np.median(np.abs(residual[mask] - center)))
         robust_scale = max(1.4826 * mad, 0.03)
         cutoff = min(
-            max_outlier_distance,
-            max(0.10, robust_sigma * robust_scale),
+            max_outlier_distance, max(0.10, robust_sigma * robust_scale)
         )
         new_mask = np.abs(residual - center) <= cutoff
         if np.array_equal(mask, new_mask):
@@ -511,17 +383,15 @@ def robust_fit_edge_line(points, is_horizontal, params):
 
     coeff = np.polyfit(independent[mask], dependent[mask], 1)
     residual = dependent - np.polyval(coeff, independent)
-    line_rmse = float(np.sqrt(np.mean(residual[mask] ** 2)))
     independent_span = max(float(np.ptp(independent)), 1e-9)
-    inlier_span_ratio = float(np.ptp(independent[mask]) / independent_span)
     return {
         "slope": float(coeff[0]),
         "intercept": float(coeff[1]),
         "inlier_mask": mask,
-        "line_rmse": line_rmse,
+        "line_rmse": float(np.sqrt(np.mean(residual[mask] ** 2))),
         "inlier_count": int(np.count_nonzero(mask)),
         "inlier_ratio": float(np.count_nonzero(mask) / len(mask)),
-        "inlier_span_ratio": inlier_span_ratio,
+        "inlier_span_ratio": float(np.ptp(independent[mask]) / independent_span),
     }
 
 
@@ -549,23 +419,13 @@ class OptimizedSizeDetector(SizeDetector):
             "pixel_size_x": None,
             "detect_direction": "outward",
             "edge_polarity": "auto",
-            "scan_step": 4,
+            # 两个调试参数
+            "roi_strip": 120,
+            "sensitivity": 50.0,
+            # 以下为固定实现常量，非调试参数
+            "scan_step": 1,
             "profile_average_half_width": 3,
-            "smooth_sigma": 1.0,
-            "candidate_strength_ratio": 0.45,
-            "max_candidates": 4,
-            "fit_radius": 8,
-            "min_contrast_ratio": 0.12,
-            "max_profile_rmse": 0.12,
-            "max_transition_width": 12.0,
             "min_valid_profiles": 12,
-            "min_profile_success_ratio": 0.20,
-            "min_line_inlier_ratio": 0.50,
-            "max_line_rmse": 0.50,
-            "min_line_inlier_span_ratio": 0.65,
-            "max_sparse_line_rmse": 1.25,
-            "robust_sigma": 2.8,
-            "max_outlier_distance": 2.0,
             "calibration_x": (1.0, 0.0),
             "calibration_y": (1.0, 0.0),
         }
@@ -584,6 +444,8 @@ class OptimizedSizeDetector(SizeDetector):
                 self.params[key] = SizeDetector.normalize_detect_direction(value)
             elif key == "edge_polarity":
                 self.params[key] = normalize_edge_polarity(value)
+            elif key == "sensitivity":
+                self.params[key] = float(np.clip(float(value), 0.0, 100.0))
             elif key in self.params:
                 self.params[key] = value
 
@@ -617,20 +479,13 @@ class OptimizedSizeDetector(SizeDetector):
 
     def prepare_image(self, image):
         """预计算固定图像的平场结果和动态范围，供人工调参重复使用。"""
-        image_gray = to_gray_float(image)
         work = apply_flat_field(
-            image_gray,
-            self.dark_reference,
-            self.flat_reference,
+            to_gray_float(image), self.dark_reference, self.flat_reference
         )
-        q_low, q_high = np.percentile(work, [1.0, 99.0])
-        global_dynamic = float(q_high - q_low)
+        global_dynamic = image_dynamic_range(work)
         if global_dynamic <= 1e-9:
             raise ValueError("图像灰度动态范围不足")
-        return {
-            "work": work,
-            "global_dynamic": global_dynamic,
-        }
+        return {"work": work, "global_dynamic": global_dynamic}
 
     def detect(self, image):
         """执行优化后的四边灰度亚像素尺寸检测。"""
@@ -649,88 +504,82 @@ class OptimizedSizeDetector(SizeDetector):
         if roi_error is not None:
             return self._fail(roi_error)
 
+        gates = sensitivity_to_gates(self.params.get("sensitivity", 50.0))
         direction = SizeDetector.normalize_detect_direction(
             self.params.get("detect_direction", "outward")
         )
         edge_polarity, polarity_scores = estimate_edge_polarity(
-            work,
-            rois,
-            direction,
-            self.params,
+            work, rois, direction, self.params
         )
+        scan_step = max(1, int(self.params.get("scan_step", 1)))
+        average_half_width = max(
+            0, int(self.params.get("profile_average_half_width", 3))
+        )
+        min_valid = max(4, int(self.params.get("min_valid_profiles", 12)))
+
         debug = {}
         lines = {}
-
         for roi_name in self.ROI_SIDES:
             roi = rois[roi_name]
-            roi_x, roi_y, roi_w, roi_h = roi
-            roi_image = work[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w]
-            edge_debug = collect_edge_points(
-                roi_image,
-                roi,
-                roi_name,
-                direction,
-                edge_polarity,
-                global_dynamic,
-                self.params,
+            profiles, is_horizontal = oriented_profiles(
+                work, roi, roi_name, direction, scan_step, average_half_width
             )
-            debug[roi_name] = edge_debug
+            info, error = locate_rise50_edges(
+                profiles, edge_polarity, global_dynamic, gates
+            )
+            if info is None:
+                return self._fail(f"{roi_name}边{error}", debug)
 
-            attempted = max(1, int(edge_debug["attempted"]))
-            valid_count = len(edge_debug["points"])
-            min_valid = min(
-                int(self.params.get("min_valid_profiles", 12)),
-                max(4, int(np.ceil(attempted * 0.5))),
-            )
-            success_ratio = valid_count / attempted
+            accepted = info["accepted"]
+            attempted = int(len(accepted))
+            valid_count = int(np.count_nonzero(accepted))
+            success_ratio = valid_count / max(1, attempted)
             if (
                 valid_count < min_valid
-                or success_ratio
-                < float(self.params.get("min_profile_success_ratio", 0.20))
+                or success_ratio < float(gates["min_profile_success_ratio"])
             ):
+                debug[roi_name] = self._side_debug(
+                    roi, is_horizontal, edge_polarity, info, attempted,
+                    valid_count, None, np.empty((0, 2)),
+                )
                 return self._fail(
-                    f"{roi_name}边有效扫描线不足: "
-                    f"{valid_count}/{attempted}",
+                    f"{roi_name}边有效扫描线不足: {valid_count}/{attempted}",
                     debug,
                 )
 
-            line = robust_fit_edge_line(
-                edge_debug["points"],
-                edge_debug["is_horizontal"],
-                self.params,
+            depth = profiles.shape[1]
+            position = info["position"][accepted]
+            if SizeDetector._is_reverse_for_side(roi_name, direction):
+                position = depth - 1 - position
+            cross = np.flatnonzero(accepted) * scan_step
+            roi_x, roi_y = roi[0], roi[1]
+            points = (
+                np.column_stack([roi_x + cross, roi_y + position])
+                if is_horizontal
+                else np.column_stack([roi_x + position, roi_y + cross])
+            )
+
+            line = robust_fit_edge_line(points, is_horizontal, gates)
+            debug[roi_name] = self._side_debug(
+                roi, is_horizontal, edge_polarity, info, attempted,
+                valid_count, line, points,
             )
             if line is None:
                 return self._fail(f"{roi_name}边直线拟合失败", debug)
-
-            edge_debug.update(line)
-            min_inlier_ratio = float(
-                self.params.get("min_line_inlier_ratio", 0.50)
-            )
-            max_line_rmse = float(self.params.get("max_line_rmse", 0.50))
-            min_inlier_span_ratio = float(
-                self.params.get("min_line_inlier_span_ratio", 0.65)
-            )
-            max_sparse_line_rmse = float(
-                self.params.get("max_sparse_line_rmse", 1.25)
-            )
-            sparse_line_valid = (
-                line["inlier_count"] >= min_valid
-                and line["inlier_span_ratio"] >= min_inlier_span_ratio
-                and line["line_rmse"] <= max_sparse_line_rmse
-            )
-            if (
-                line["inlier_ratio"] < min_inlier_ratio
-                and not sparse_line_valid
+            if line["inlier_ratio"] < float(gates["min_line_inlier_ratio"]):
+                return self._fail(
+                    f"{roi_name}边内点比例不足: {line['inlier_ratio']:.3f}", debug
+                )
+            if line["line_rmse"] > float(gates["max_line_rmse"]):
+                return self._fail(
+                    f"{roi_name}边拟合残差过大: {line['line_rmse']:.3f}px", debug
+                )
+            if line["inlier_span_ratio"] < float(
+                gates["min_line_inlier_span_ratio"]
             ):
                 return self._fail(
-                    f"{roi_name}边内点比例不足: "
-                    f"{line['inlier_ratio']:.3f}",
-                    debug,
-                )
-            if line["line_rmse"] > max_line_rmse and not sparse_line_valid:
-                return self._fail(
-                    f"{roi_name}边拟合残差过大: "
-                    f"{line['line_rmse']:.3f}px",
+                    f"{roi_name}边内点跨度不足: "
+                    f"{line['inlier_span_ratio']:.3f}",
                     debug,
                 )
             lines[roi_name] = line
@@ -764,12 +613,10 @@ class OptimizedSizeDetector(SizeDetector):
         raw_height_mm = height_pixel * pixel_size_y
         try:
             width_mm = self._calibrate(
-                raw_width_mm,
-                self.params.get("calibration_x", (1.0, 0.0)),
+                raw_width_mm, self.params.get("calibration_x", (1.0, 0.0))
             )
             height_mm = self._calibrate(
-                raw_height_mm,
-                self.params.get("calibration_y", (1.0, 0.0)),
+                raw_height_mm, self.params.get("calibration_y", (1.0, 0.0))
             )
         except ValueError as exc:
             return self._fail(str(exc), debug)
@@ -806,6 +653,7 @@ class OptimizedSizeDetector(SizeDetector):
             "box_points": box_points,
             "edge_polarity": edge_polarity,
             "polarity_scores": polarity_scores,
+            "gates": gates,
         }
 
         self.last_debug = debug
@@ -816,6 +664,41 @@ class OptimizedSizeDetector(SizeDetector):
             is_valid=bool(is_valid),
         )
         return self.detection_result
+
+    @staticmethod
+    def _side_debug(roi, is_horizontal, edge_polarity, info, attempted,
+                    valid_count, line, points):
+        """整理单边调试信息，供可视化与质量面板使用。"""
+        accepted = info["accepted"]
+        entry = {
+            "roi": tuple(int(v) for v in roi),
+            "is_horizontal": is_horizontal,
+            "edge_polarity": edge_polarity,
+            "attempted": attempted,
+            "valid": valid_count,
+            "points": np.asarray(points, dtype=np.float64).reshape(-1, 2),
+            "plateau": int(info["plateau"]),
+        }
+        if valid_count > 0:
+            entry["contrast_ratio"] = float(
+                np.median(info["contrast_ratio"][accepted])
+            )
+            entry["edge_width"] = float(np.median(info["edge_width"][accepted]))
+            middle = int(np.flatnonzero(accepted)[valid_count // 2])
+        else:
+            entry["contrast_ratio"] = 0.0
+            entry["edge_width"] = 0.0
+            middle = int(len(accepted) // 2)
+        entry["representative"] = {
+            "window": info["window"][middle],
+            "smoothed": info["smoothed"][middle],
+            "dark": float(info["dark"][middle]),
+            "bright": float(info["bright"][middle]),
+            "inner_span": INNER_SPAN,
+        }
+        if line is not None:
+            entry.update(line)
+        return entry
 
 
 # ==================== 人工测试可视化 ====================
@@ -838,9 +721,7 @@ def normalize_for_display(image):
         display = np.zeros(gray.shape, dtype=np.uint8)
     else:
         display = np.clip(
-            (gray - q_low) * 255.0 / (q_high - q_low),
-            0,
-            255,
+            (gray - q_low) * 255.0 / (q_high - q_low), 0, 255
         ).astype(np.uint8)
     return cv.cvtColor(display, cv.COLOR_GRAY2BGR)
 
@@ -848,24 +729,12 @@ def normalize_for_display(image):
 def _put_hud_text(image, text, origin, color, scale=0.65, thickness=1):
     x, y = origin
     cv.putText(
-        image,
-        text,
-        (x + 1, y + 1),
-        cv.FONT_HERSHEY_SIMPLEX,
-        scale,
-        (0, 0, 0),
-        thickness + 2,
-        cv.LINE_AA,
+        image, text, (x + 1, y + 1), cv.FONT_HERSHEY_SIMPLEX, scale,
+        (0, 0, 0), thickness + 2, cv.LINE_AA,
     )
     cv.putText(
-        image,
-        text,
-        origin,
-        cv.FONT_HERSHEY_SIMPLEX,
-        scale,
-        color,
-        thickness,
-        cv.LINE_AA,
+        image, text, origin, cv.FONT_HERSHEY_SIMPLEX, scale, color,
+        thickness, cv.LINE_AA,
     )
 
 
@@ -884,11 +753,8 @@ def draw_detection_debug(image, detector, image_name="", base_display=None):
 
         roi_x, roi_y, roi_w, roi_h = info["roi"]
         cv.rectangle(
-            canvas,
-            (roi_x, roi_y),
-            (roi_x + roi_w - 1, roi_y + roi_h - 1),
-            (0, 165, 255),
-            1,
+            canvas, (roi_x, roi_y), (roi_x + roi_w - 1, roi_y + roi_h - 1),
+            (0, 165, 255), 1,
         )
 
         points = np.asarray(info.get("points", []), dtype=np.float64)
@@ -899,27 +765,19 @@ def draw_detection_debug(image, detector, image_name="", base_display=None):
             for idx, point in enumerate(points):
                 color = (0, 220, 0) if inlier_mask[idx] else (0, 0, 255)
                 cv.circle(
-                    canvas,
-                    (int(round(point[0])), int(round(point[1]))),
-                    1,
-                    color,
-                    -1,
-                    cv.LINE_AA,
+                    canvas, (int(round(point[0])), int(round(point[1]))),
+                    1, color, -1, cv.LINE_AA,
                 )
 
         if "slope" in info and "intercept" in info:
             if info["is_horizontal"]:
                 x0, x1 = roi_x, roi_x + roi_w - 1
-                y0 = evaluate_edge_line(info, x0)
-                y1 = evaluate_edge_line(info, x1)
-                p0 = (int(x0), int(round(y0)))
-                p1 = (int(x1), int(round(y1)))
+                p0 = (int(x0), int(round(evaluate_edge_line(info, x0))))
+                p1 = (int(x1), int(round(evaluate_edge_line(info, x1))))
             else:
                 y0, y1 = roi_y, roi_y + roi_h - 1
-                x0 = evaluate_edge_line(info, y0)
-                x1 = evaluate_edge_line(info, y1)
-                p0 = (int(round(x0)), int(y0))
-                p1 = (int(round(x1)), int(y1))
+                p0 = (int(round(evaluate_edge_line(info, y0))), int(y0))
+                p1 = (int(round(evaluate_edge_line(info, y1))), int(y1))
             cv.line(canvas, p0, p1, (0, 255, 255), 1, cv.LINE_AA)
 
     result = detector.detection_result
@@ -927,18 +785,16 @@ def draw_detection_debug(image, detector, image_name="", base_display=None):
         x, y, width, height = result.box_points
         color = (0, 255, 0) if result.is_valid else (0, 0, 255)
         cv.rectangle(
-            canvas,
-            (int(round(x)), int(round(y))),
+            canvas, (int(round(x)), int(round(y))),
             (int(round(x + width)), int(round(y + height))),
-            color,
-            2,
-            cv.LINE_AA,
+            color, 2, cv.LINE_AA,
         )
-        status = "OK" if result.is_valid else "NG"
+        summary = debug.get("summary", {})
         lines = [
             f"{image_name}",
             f"W={result.width:.6f} mm  H={result.height:.6f} mm",
-            f"STATUS={status}",
+            f"STATUS={'OK' if result.is_valid else 'NG'}"
+            f"  polarity={summary.get('edge_polarity', '?')}",
         ]
     else:
         error_msg = "" if result is None else str(result.error_msg or "")
@@ -955,15 +811,12 @@ def draw_detection_debug(image, detector, image_name="", base_display=None):
     return canvas
 
 
-def _draw_curve(canvas, values, rect, color, value_range=None):
+def _draw_curve(canvas, values, rect, color, value_range):
     values = np.asarray(values, dtype=np.float64)
     if len(values) < 2:
         return
     x, y, width, height = rect
-    if value_range is None:
-        v_min, v_max = float(np.min(values)), float(np.max(values))
-    else:
-        v_min, v_max = value_range
+    v_min, v_max = value_range
     if v_max - v_min <= 1e-9:
         return
     xs = np.linspace(x, x + width - 1, len(values))
@@ -973,7 +826,7 @@ def _draw_curve(canvas, values, rect, color, value_range=None):
 
 
 def render_quality_panel(debug, width=1000, height=680):
-    """绘制四边代表扫描线、ESF 拟合和质量参数。"""
+    """绘制四边代表扫描线、判据电平和质量指标。"""
     canvas = np.full((height, width, 3), 25, dtype=np.uint8)
     margin = 12
     cell_width = (width - margin * 3) // 2
@@ -984,245 +837,108 @@ def render_quality_panel(debug, width=1000, height=680):
         x0 = margin + col * (cell_width + margin)
         y0 = margin + row * (cell_height + margin)
         cv.rectangle(
-            canvas,
-            (x0, y0),
-            (x0 + cell_width - 1, y0 + cell_height - 1),
-            (70, 70, 70),
-            1,
+            canvas, (x0, y0), (x0 + cell_width - 1, y0 + cell_height - 1),
+            (70, 70, 70), 1,
         )
 
         info = debug.get(roi_name) or {}
         representative = info.get("representative")
-        count = len(info.get("points", []))
-        attempted = int(info.get("attempted", 0))
-        rmse = info.get("line_rmse")
-        label = f"{roi_name}: profiles={count}/{attempted}"
-        if rmse is not None:
-            label += f" line_rmse={rmse:.3f}px"
+        label = (
+            f"{roi_name}: profiles={info.get('valid', 0)}/"
+            f"{info.get('attempted', 0)}"
+        )
+        if info.get("line_rmse") is not None:
+            label += f" line_rmse={info['line_rmse']:.3f}px"
         _put_hud_text(canvas, label, (x0 + 8, y0 + 20), (240, 240, 240), 0.48)
 
         if not representative:
             continue
 
+        window = np.asarray(representative["window"], dtype=np.float64)
+        dark = representative["dark"]
+        bright = representative["bright"]
+        span = max(bright - dark, 1e-9)
         plot = (x0 + 8, y0 + 35, cell_width - 16, cell_height - 48)
+        value_range = (dark - 0.25 * span, bright + 0.25 * span)
+
+        _draw_curve(canvas, window, plot, (130, 130, 130), value_range)
         _draw_curve(
-            canvas,
-            representative["profile"],
-            plot,
-            (130, 130, 130),
-            (-0.2, 1.2),
-        )
-        _draw_curve(
-            canvas,
-            representative["smoothed"],
-            plot,
-            (0, 220, 255),
-            (-0.2, 1.2),
+            canvas, representative["smoothed"], plot, (0, 220, 255), value_range
         )
 
-        fit_x = representative["fit_x"]
-        fit_y = representative["fit_y"]
-        fit_canvas = np.full(len(representative["profile"]), np.nan)
-        fit_indices = np.clip(
-            np.round(fit_x).astype(int),
-            0,
-            len(fit_canvas) - 1,
-        )
-        fit_canvas[fit_indices] = fit_y
-        valid = np.isfinite(fit_canvas)
-        if np.count_nonzero(valid) >= 2:
-            x, y, plot_w, plot_h = plot
-            xs = x + np.flatnonzero(valid) * (plot_w - 1) / max(
-                1, len(fit_canvas) - 1
+        # 暗环 / 50% / 亮平台三条判据电平
+        for level, color in (
+            (dark, (255, 120, 60)),
+            (dark + 0.5 * span, (0, 255, 0)),
+            (bright, (255, 120, 60)),
+        ):
+            y = int(
+                plot[1] + plot[3] - 1
+                - (level - value_range[0]) * (plot[3] - 1)
+                / (value_range[1] - value_range[0])
             )
-            ys = (
-                y + plot_h - 1
-                - (fit_canvas[valid] + 0.2) * (plot_h - 1) / 1.4
-            )
-            points = np.column_stack([xs, ys]).astype(np.int32)
-            cv.polylines(canvas, [points], False, (0, 255, 0), 1, cv.LINE_AA)
-
-        edge_x = int(
-            plot[0]
-            + representative["oriented_position"]
-            * (plot[2] - 1)
-            / max(1, len(representative["profile"]) - 1)
-        )
-        cv.line(
-            canvas,
-            (edge_x, plot[1]),
-            (edge_x, plot[1] + plot[3] - 1),
-            (255, 180, 0),
-            1,
-            cv.LINE_AA,
-        )
+            cv.line(canvas, (plot[0], y), (plot[0] + plot[2] - 1, y), color, 1)
 
         quality = (
-            f"contrast={representative['contrast_ratio']:.3f}  "
-            f"profile_rmse={representative['profile_rmse']:.3f}  "
-            f"width={representative['transition_width']:.2f}px"
+            f"contrast={info.get('contrast_ratio', 0):.3f}  "
+            f"edge_width={info.get('edge_width', 0):.2f}px  "
+            f"inlier={info.get('inlier_ratio', 0):.3f}"
         )
         _put_hud_text(
-            canvas,
-            quality,
-            (x0 + 8, y0 + cell_height - 8),
-            (190, 190, 190),
-            0.42,
+            canvas, quality, (x0 + 8, y0 + cell_height - 8), (190, 190, 190), 0.42
         )
 
     _put_hud_text(
         canvas,
-        "gray=normalized profile  yellow=smoothed  green=ESF fit  blue=edge",
-        (margin, height - 4),
-        (190, 190, 190),
-        0.42,
+        "gray=window  yellow=smoothed  orange=dark/bright levels  green=50% level",
+        (margin, height - 4), (190, 190, 190), 0.42,
     )
     return canvas
 
 
 def init_windows(args):
-    """初始化人工调参窗口。"""
+    """初始化人工调参窗口，只暴露两个调试参数。"""
     global _WINDOWS_READY
     if _WINDOWS_READY:
         return
 
     cv.namedWindow(CONTROL_WINDOW, cv.WINDOW_NORMAL)
-    cv.resizeWindow(CONTROL_WINDOW, 760, 350)
+    cv.resizeWindow(CONTROL_WINDOW, 760, 300)
     cv.namedWindow(RESULT_WINDOW, cv.WINDOW_NORMAL)
     cv.namedWindow(QUALITY_WINDOW, cv.WINDOW_NORMAL)
 
-    cv.createTrackbar("roi_strip", CONTROL_WINDOW, int(args.roi_strip), 2000, _noop)
-    cv.createTrackbar("scan_step", CONTROL_WINDOW, int(args.scan_step), 20, _noop)
+    cv.createTrackbar("roi_strip", CONTROL_WINDOW, int(args.roi_strip), 400, _noop)
     cv.createTrackbar(
-        "avg_half",
-        CONTROL_WINDOW,
-        int(args.profile_average_half_width),
-        8,
-        _noop,
-    )
-    cv.createTrackbar(
-        "smooth_x10",
-        CONTROL_WINDOW,
-        int(round(args.smooth_sigma * 10)),
-        50,
-        _noop,
-    )
-    cv.createTrackbar(
-        "candidate_pct",
-        CONTROL_WINDOW,
-        int(round(args.candidate_strength_ratio * 100)),
-        100,
-        _noop,
-    )
-    cv.createTrackbar(
-        "contrast_x1000",
-        CONTROL_WINDOW,
-        int(round(args.min_contrast_ratio * 1000)),
-        1000,
-        _noop,
-    )
-    cv.createTrackbar(
-        "profile_rmse_x1000",
-        CONTROL_WINDOW,
-        int(round(args.max_profile_rmse * 1000)),
-        1000,
-        _noop,
-    )
-    cv.createTrackbar(
-        "line_rmse_x1000",
-        CONTROL_WINDOW,
-        int(round(args.max_line_rmse * 1000)),
-        2000,
-        _noop,
-    )
-    cv.createTrackbar(
-        "transition_x10",
-        CONTROL_WINDOW,
-        int(round(args.max_transition_width * 10)),
-        500,
-        _noop,
-    )
-    cv.createTrackbar(
-        "inward",
-        CONTROL_WINDOW,
-        1 if args.direction == "inward" else 0,
-        1,
-        _noop,
-    )
-    polarity_value = {
-        "auto": 0,
-        "falling": 1,
-        "rising": 2,
-    }[args.edge_polarity]
-    cv.createTrackbar(
-        "polarity",
-        CONTROL_WINDOW,
-        polarity_value,
-        2,
-        _noop,
+        "sensitivity", CONTROL_WINDOW, int(round(args.sensitivity)), 100, _noop
     )
     _WINDOWS_READY = True
 
 
 def read_control_params():
-    """读取轨迹条参数，返回 ROI 宽度与检测参数。"""
-    roi_strip = max(12, cv.getTrackbarPos("roi_strip", CONTROL_WINDOW))
-    params = {
-        "scan_step": max(1, cv.getTrackbarPos("scan_step", CONTROL_WINDOW)),
-        "profile_average_half_width": cv.getTrackbarPos("avg_half", CONTROL_WINDOW),
-        "smooth_sigma": cv.getTrackbarPos("smooth_x10", CONTROL_WINDOW) / 10.0,
-        "candidate_strength_ratio": max(
-            0.01,
-            cv.getTrackbarPos("candidate_pct", CONTROL_WINDOW) / 100.0,
-        ),
-        "min_contrast_ratio": cv.getTrackbarPos(
-            "contrast_x1000", CONTROL_WINDOW
-        ) / 1000.0,
-        "max_profile_rmse": max(
-            0.001,
-            cv.getTrackbarPos("profile_rmse_x1000", CONTROL_WINDOW) / 1000.0,
-        ),
-        "max_line_rmse": max(
-            0.001,
-            cv.getTrackbarPos("line_rmse_x1000", CONTROL_WINDOW) / 1000.0,
-        ),
-        "max_transition_width": max(
-            1.0,
-            cv.getTrackbarPos("transition_x10", CONTROL_WINDOW) / 10.0,
-        ),
-        "detect_direction": (
-            "inward"
-            if cv.getTrackbarPos("inward", CONTROL_WINDOW)
-            else "outward"
-        ),
-        "edge_polarity": {
-            0: "auto",
-            1: "falling",
-            2: "rising",
-        }[cv.getTrackbarPos("polarity", CONTROL_WINDOW)],
-    }
-    signature = (roi_strip,) + tuple(params.values())
-    return roi_strip, params, signature
+    """读取两个轨迹条，返回 ROI 深度与检测参数。"""
+    roi_strip = max(40, cv.getTrackbarPos("roi_strip", CONTROL_WINDOW))
+    sensitivity = float(cv.getTrackbarPos("sensitivity", CONTROL_WINDOW))
+    params = {"roi_strip": roi_strip, "sensitivity": sensitivity}
+    return roi_strip, params, (roi_strip, sensitivity)
 
 
-def render_control_help(width=760, height=300):
-    """显示参数含义与操作提示。"""
+def render_control_help(width=760, height=260):
+    """显示两个参数的含义与操作提示。"""
     panel = np.full((height, width, 3), 28, dtype=np.uint8)
     lines = [
-        "Optimized grayscale subpixel detector",
-        "roi_strip: default four-side ROI depth",
-        "scan_step / avg_half: profile spacing and lateral averaging",
-        "smooth_x10: Gaussian sigma",
-        "candidate_pct: candidate edge / strongest gradient threshold",
-        "contrast_x1000: minimum fitted contrast / image dynamic range",
-        "profile_rmse_x1000: maximum normalized ESF residual",
-        "line_rmse_x1000: maximum inlier line residual (pixel)",
-        "transition_x10: maximum 10%-90% edge width (pixel)",
-        "inward: 0=inside-to-outside, 1=outside-to-inside",
-        "polarity: 0=auto, 1=falling, 2=rising",
+        "Optimized grayscale subpixel detector (rise-50% criterion)",
+        "",
+        "roi_strip: four-side ROI search depth in pixels.",
+        "  Only decides whether the edge is inside the ROI.",
+        "  Verified neutral: 80..250 px changes the reading by <0.02 um.",
+        "",
+        "sensitivity: edge quality strictness, 0..100.",
+        "  50 = validated operating point (16/19 images, no gross error).",
+        "  Higher  -> only crisp edges accepted, more rejects, never wrong.",
+        "  Lower   -> weak/soft edges accepted, may admit a bad edge.",
     ]
     for idx, line in enumerate(lines):
-        _put_hud_text(panel, line, (12, 22 + idx * 24), (220, 220, 220), 0.48)
+        _put_hud_text(panel, line, (12, 22 + idx * 24), (220, 220, 220), 0.46)
     return panel
 
 
@@ -1234,10 +950,7 @@ def select_four_rois(image):
         window_name = f"select_{side}_roi"
         print(f"请框选 {side} 边 ROI，Enter/Space 确认，ESC 取消")
         roi = cv.selectROI(
-            window_name,
-            display,
-            showCrosshair=True,
-            fromCenter=False,
+            window_name, display, showCrosshair=True, fromCenter=False
         )
         cv.destroyWindow(window_name)
         if roi[2] <= 0 or roi[3] <= 0:
@@ -1296,22 +1009,16 @@ def run_manual_ui(detector, image_path, args):
         if current_signature != last_signature:
             img_h, img_w = image.shape[:2]
             rois = custom_rois or SizeDetector.default_rois(
-                img_w,
-                img_h,
-                strip=min(roi_strip, max(img_h, img_w)),
+                img_w, img_h, strip=min(roi_strip, max(img_h, img_w))
             )
             detector.update_params(
-                {
-                    **control_params,
-                    "rois": rois,
-                },
-                clear_result=False,
+                {**control_params, "rois": rois}, clear_result=False
             )
+            start_time = time.perf_counter()
             result = detector.detect_prepared(prepared)
+            elapsed_ms = (time.perf_counter() - start_time) * 1000.0
             result_image = draw_detection_debug(
-                image,
-                detector,
-                Path(image_path).name,
+                image, detector, Path(image_path).name,
                 base_display=base_display,
             )
             quality_image = render_quality_panel(detector.last_debug)
@@ -1323,7 +1030,8 @@ def run_manual_ui(detector, image_path, args):
                     f"{Path(image_path).name}: "
                     f"W={result.width:.6f}mm H={result.height:.6f}mm "
                     f"raw=({summary.get('raw_width_mm', 0):.6f}, "
-                    f"{summary.get('raw_height_mm', 0):.6f})mm"
+                    f"{summary.get('raw_height_mm', 0):.6f})mm "
+                    f"time={elapsed_ms:.1f}ms"
                 )
             last_signature = current_signature
             cv.imshow(RESULT_WINDOW, result_image)
@@ -1347,10 +1055,7 @@ def run_manual_ui(detector, image_path, args):
             last_signature = None
         if key in (ord("s"), ord("S")):
             save_debug_images(
-                args.save_dir,
-                image_path,
-                result_image,
-                quality_image,
+                args.save_dir, image_path, result_image, quality_image
             )
 
 
@@ -1381,7 +1086,7 @@ def load_optional_image(path):
 
 
 def validate_args(args):
-    """统一验证命令行与人工轨迹条共用参数。"""
+    """验证命令行参数。"""
     errors = []
 
     def require_finite(name, value):
@@ -1392,10 +1097,6 @@ def validate_args(args):
 
     positive_values = {
         "pixel_size": args.pixel_size,
-        "max_profile_rmse": args.max_profile_rmse,
-        "max_transition_width": args.max_transition_width,
-        "max_line_rmse": args.max_line_rmse,
-        "max_sparse_line_rmse": args.max_sparse_line_rmse,
         "calibration_x_scale": args.calibration_x_scale,
         "calibration_y_scale": args.calibration_y_scale,
     }
@@ -1405,15 +1106,12 @@ def validate_args(args):
         if require_finite(name, value) and float(value) <= 0:
             errors.append(f"{name} 必须大于 0")
 
-    nonnegative_values = {
+    for name, value in {
         "std_width": args.std_width,
         "std_height": args.std_height,
         "tolerance_x": args.tolerance_x,
         "tolerance_y": args.tolerance_y,
-        "smooth_sigma": args.smooth_sigma,
-        "min_contrast_ratio": args.min_contrast_ratio,
-    }
-    for name, value in nonnegative_values.items():
+    }.items():
         if require_finite(name, value) and float(value) < 0:
             errors.append(f"{name} 不能小于 0")
 
@@ -1423,49 +1121,10 @@ def validate_args(args):
     }.items():
         require_finite(name, value)
 
-    bounded_values = {
-        "candidate_strength_ratio": (args.candidate_strength_ratio, 0.01, 1.0),
-        "min_contrast_ratio": (args.min_contrast_ratio, 0.0, 1.0),
-        "max_profile_rmse": (args.max_profile_rmse, 0.001, 1.0),
-        "min_profile_success_ratio": (
-            args.min_profile_success_ratio,
-            0.0,
-            1.0,
-        ),
-        "min_line_inlier_ratio": (args.min_line_inlier_ratio, 0.0, 1.0),
-        "min_line_inlier_span_ratio": (
-            args.min_line_inlier_span_ratio,
-            0.0,
-            1.0,
-        ),
-    }
-    for name, (value, lower, upper) in bounded_values.items():
-        if require_finite(name, value) and not lower <= float(value) <= upper:
-            errors.append(f"{name} 必须在 [{lower}, {upper}] 范围内")
-
-    integer_ranges = {
-        "roi_strip": (args.roi_strip, 12, 2000),
-        "scan_step": (args.scan_step, 1, 20),
-        "profile_average_half_width": (
-            args.profile_average_half_width,
-            0,
-            8,
-        ),
-        "fit_radius": (args.fit_radius, 4, 100),
-        "min_valid_profiles": (args.min_valid_profiles, 2, 10000),
-    }
-    for name, (value, lower, upper) in integer_ranges.items():
-        if not lower <= int(value) <= upper:
-            errors.append(f"{name} 必须在 [{lower}, {upper}] 范围内")
-
-    ui_ranges = {
-        "smooth_sigma": (args.smooth_sigma, 0.0, 5.0),
-        "max_line_rmse": (args.max_line_rmse, 0.001, 2.0),
-        "max_transition_width": (args.max_transition_width, 1.0, 50.0),
-    }
-    for name, (value, lower, upper) in ui_ranges.items():
-        if require_finite(name, value) and not lower <= float(value) <= upper:
-            errors.append(f"{name} 必须在 [{lower}, {upper}] 范围内")
+    if not 0.0 <= float(args.sensitivity) <= 100.0:
+        errors.append("sensitivity 必须在 [0, 100] 范围内")
+    if not 40 <= int(args.roi_strip) <= 400:
+        errors.append("roi_strip 必须在 [40, 400] 范围内")
 
     if errors:
         raise ValueError("参数验证失败:\n  - " + "\n  - ".join(errors))
@@ -1482,33 +1141,18 @@ def build_detector(args):
             "allow_tolerance_y": args.tolerance_y,
             "detect_direction": args.direction,
             "edge_polarity": args.edge_polarity,
-            "scan_step": args.scan_step,
-            "profile_average_half_width": args.profile_average_half_width,
-            "smooth_sigma": args.smooth_sigma,
-            "candidate_strength_ratio": args.candidate_strength_ratio,
-            "fit_radius": args.fit_radius,
-            "min_contrast_ratio": args.min_contrast_ratio,
-            "max_profile_rmse": args.max_profile_rmse,
-            "max_transition_width": args.max_transition_width,
-            "min_valid_profiles": args.min_valid_profiles,
-            "min_profile_success_ratio": args.min_profile_success_ratio,
-            "min_line_inlier_ratio": args.min_line_inlier_ratio,
-            "max_line_rmse": args.max_line_rmse,
-            "min_line_inlier_span_ratio": args.min_line_inlier_span_ratio,
-            "max_sparse_line_rmse": args.max_sparse_line_rmse,
+            "roi_strip": args.roi_strip,
+            "sensitivity": args.sensitivity,
             "calibration_x": (
-                args.calibration_x_scale,
-                args.calibration_x_offset,
+                args.calibration_x_scale, args.calibration_x_offset
             ),
             "calibration_y": (
-                args.calibration_y_scale,
-                args.calibration_y_offset,
+                args.calibration_y_scale, args.calibration_y_offset
             ),
         }
     )
     detector.set_reference_images(
-        load_optional_image(args.dark),
-        load_optional_image(args.flat),
+        load_optional_image(args.dark), load_optional_image(args.flat)
     )
     return detector
 
@@ -1529,9 +1173,7 @@ def run_without_ui(detector, image_paths, args):
         detector.update_params(
             {
                 "rois": SizeDetector.default_rois(
-                    img_w,
-                    img_h,
-                    strip=args.roi_strip,
+                    img_w, img_h, strip=args.roi_strip
                 )
             },
             clear_result=False,
@@ -1568,11 +1210,10 @@ def run_without_ui(detector, image_paths, args):
             if not saved:
                 exit_code = 1
 
-    total_count = len(image_paths)
     total_ms = float(np.sum(elapsed_values))
     average_ms = total_ms / max(1, len(elapsed_values))
     print(
-        f"SUMMARY: success={success_count}/{total_count} "
+        f"SUMMARY: success={success_count}/{len(image_paths)} "
         f"total={total_ms:.1f}ms average={average_ms:.1f}ms/image"
     )
     return exit_code
@@ -1595,34 +1236,20 @@ def parse_args():
     parser.add_argument("--tolerance-x", type=float, default=0.0)
     parser.add_argument("--tolerance-y", type=float, default=0.0)
     parser.add_argument(
-        "--direction",
-        choices=("outward", "inward"),
-        default="outward",
+        "--direction", choices=("outward", "inward"), default="outward"
     )
     parser.add_argument(
         "--edge-polarity",
         choices=("auto", "falling", "rising"),
         default="auto",
     )
-    parser.add_argument("--roi-strip", type=int, default=120)
-    parser.add_argument("--scan-step", type=int, default=4)
-    parser.add_argument("--profile-average-half-width", type=int, default=3)
-    parser.add_argument("--smooth-sigma", type=float, default=1.0)
-    parser.add_argument("--candidate-strength-ratio", type=float, default=0.45)
-    parser.add_argument("--fit-radius", type=int, default=8)
-    parser.add_argument("--min-contrast-ratio", type=float, default=0.12)
-    parser.add_argument("--max-profile-rmse", type=float, default=0.12)
-    parser.add_argument("--max-transition-width", type=float, default=12.0)
-    parser.add_argument("--min-valid-profiles", type=int, default=12)
-    parser.add_argument("--min-profile-success-ratio", type=float, default=0.20)
-    parser.add_argument("--min-line-inlier-ratio", type=float, default=0.50)
-    parser.add_argument("--max-line-rmse", type=float, default=0.50)
     parser.add_argument(
-        "--min-line-inlier-span-ratio",
-        type=float,
-        default=0.65,
+        "--roi-strip", type=int, default=120, help="ROI 搜索深度（调试参数 1）"
     )
-    parser.add_argument("--max-sparse-line-rmse", type=float, default=1.25)
+    parser.add_argument(
+        "--sensitivity", type=float, default=50.0,
+        help="边缘灵敏度 0~100，50 为验证工作点（调试参数 2）",
+    )
     parser.add_argument("--calibration-x-scale", type=float, default=1.0)
     parser.add_argument("--calibration-x-offset", type=float, default=0.0)
     parser.add_argument("--calibration-y-scale", type=float, default=1.0)

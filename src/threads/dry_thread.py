@@ -67,6 +67,7 @@ class DryThread(QThread):
             "pixel_size": self.params.get("pixel_size", 0.008823),
             "pixel_size_x": self.params.get("pixel_size_x"),
             "detect_direction": self.params.get("size_detect_direction", "outward"),
+            "algorithm": "hybrid",
         }
         
         self.ball_detect_params = {

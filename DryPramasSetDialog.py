@@ -44,11 +44,9 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         self.scratch_detector = ScratchDetector()
         self.config_manager = config_manager
         self.local_params = self.config_manager.get_section("work_dry_params")
+        self.template_image = None  # 模板图像；迁移 ROI 时可能尚未加载
         self._migrate_mark_roi_min_areas()
         self._migrate_size_rois()
-
-        # 存储原始图像
-        self.template_image = None  # 模板图像（用于显示，可能包含屏蔽效果，用于检测）
 
         # 设置 SpinBox 范围
         self.spin_thresh_lower_ball.setMinimum(0)
@@ -255,7 +253,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         ):
             self.local_params["size_rois"] = self._serialize_size_rois(existing)
             return
-        if self.template_image is not None:
+        if getattr(self, "template_image", None) is not None:
             h, w = self.template_image.shape[:2]
         else:
             w, h = 1000, 1000
@@ -836,6 +834,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                     "detect_direction": self.local_params.get(
                         "size_detect_direction", "outward"
                     ),
+                    "algorithm": "hybrid",
                 })
             
             #————————————————————————mark参数——————————————————————

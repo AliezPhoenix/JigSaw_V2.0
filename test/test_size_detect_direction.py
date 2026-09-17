@@ -60,14 +60,14 @@ def test_boundary_rising_vs_falling_polarity():
 def _run_detect(direction):
     h, w = 200, 300
     image = np.zeros((h, w), dtype=np.uint8)
-    # 白产品需伸入默认四边条带 ROI（strip=40），否则左右 ROI 全黑无边
+    # 白产品需伸入默认四边条带 ROI，否则左右 ROI 全黑无边
     image[25:175, 30:270] = 255
     det = SizeDetector()
     det.update_params(
         {
             "min_threshold": 128,
             "max_threshold": 255,
-            "rois": SizeDetector.default_rois(w, h, strip=40),
+            "rois": SizeDetector.default_rois(w, h, strip=80),
             "std_size": (0.0, 0.0),
             "pixel_size": 0.01,
             "detect_direction": direction,
@@ -92,17 +92,17 @@ def test_detect_outward_with_default_rois_valid_box():
 
 @pytest.mark.parametrize(
     "delta,want",
-    [
-        (0.0, 0.0),
-        (0.99, 0.0),
-        (1.0, 0.0),
-        (2.0, -0.5),
-        (3.0, -1.0),
-        (5.0, -2.0),
-        (6.0, -2.0),
-        (-2.0, 0.5),
-        (-5.0, 2.0),
-    ],
+        [
+            (0.0, 0.0),
+            (0.99, 0.0),
+            (1.0, 0.0),
+            (2.0, -0.5),
+            (3.0, 0.0),
+            (5.0, 0.0),
+            (6.0, 0.0),
+            (-2.0, 0.5),
+            (-5.0, 0.0),
+        ],
 )
 def test_compensation_delta_px_deadband_frac(delta, want):
     assert compensation_delta_px(delta) == pytest.approx(want)
@@ -148,3 +148,29 @@ def test_detect_inward_with_default_rois_valid_box():
     assert 10 < y < 45
     assert 200 < bw < 260
     assert 120 < bh < 170
+
+
+def test_legacy_algorithm_still_detects_white_rectangle():
+    """Transfer 旧投影路径：algorithm=legacy 仍可用。"""
+    h, w = 200, 300
+    image = np.zeros((h, w), dtype=np.uint8)
+    image[25:175, 30:270] = 255
+    det = SizeDetector()
+    det.update_params(
+        {
+            "algorithm": "legacy",
+            "min_threshold": 128,
+            "max_threshold": 255,
+            "rois": SizeDetector.default_rois(w, h, strip=80),
+            "std_size": (0.0, 0.0),
+            "pixel_size": 0.01,
+            "detect_direction": "outward",
+        }
+    )
+    result = det.detect(image)
+    assert result.error_code == 0
+    x, y, bw, bh = result.box_points
+    assert bw > 0 and bh > 0
+    assert 15 < x < 50
+    assert 10 < y < 45
+

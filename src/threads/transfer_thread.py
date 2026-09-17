@@ -64,6 +64,7 @@ class TransferThread(QThread):
             "std_size": self.params.get("product_size", [10.0, 15.0]),
             "pixel_size": self.params.get("pixel_size", 0.008823),
             "pixel_size_x": self.params.get("pixel_size_x"),
+            "algorithm": "legacy",
         }
         self.ball_detect_params = {
             "min_threshold": self.params.get("min_threshold_ball", 0),
