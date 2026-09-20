@@ -141,6 +141,18 @@ def test_bind_clears_preview_local_stylesheet():
     assert tabs.styleSheet() == ""
 
 
+def test_bind_does_not_tag_status_label_as_preview():
+    app = _app()
+    apply(app)
+    host = QWidget()
+    status = QLabel(host)
+    status.setObjectName("label_main_running_status")
+    status.setStyleSheet("border: 1px solid gray; background-color: #2b2b2b;")
+    bind(host)
+    assert status.property("jigsawRole") != "preview"
+    assert "background-color: #2b2b2b" in status.styleSheet()
+
+
 def test_main_entry_does_not_import_qt_material():
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     with open(os.path.join(root, "main.py"), encoding="utf-8") as handle:

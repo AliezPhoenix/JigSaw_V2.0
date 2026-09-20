@@ -300,8 +300,6 @@ def apply(app):
 _PREVIEW_OBJECT_NAMES = {
     "processed_image_label",
     "template_image_label",
-    "label_current_cam_live_dry",
-    "label_current_cam_live_transfer",
     "label_sucker1_cam_live",
     "label_sucker2_cam_live",
     "graphicsView_fulltray_cam_live",
@@ -326,7 +324,9 @@ def _is_preview_object(name):
     return any(name.startswith(prefix) for prefix in _PREVIEW_OBJECT_PREFIXES)
 
 
-def _is_preview_hole(ss):
+def _is_preview_hole(ss, name=""):
+    if "status" in (name or "").lower():
+        return False
     compact = _compact(ss)
     if "background-color:#2b2b2b" not in compact:
         return False
@@ -365,11 +365,12 @@ def bind(root):
             continue
         seen.add(key)
         ss = widget.styleSheet() or ""
+        name = widget.objectName()
         tagged = False
-        if _is_preview_object(widget.objectName()):
+        if _is_preview_object(name):
             widget.setProperty("jigsawRole", "preview")
             tagged = True
-        if _is_preview_hole(ss):
+        if _is_preview_hole(ss, name):
             widget.setProperty("jigsawRole", "preview")
             widget.setStyleSheet("")
             tagged = True
