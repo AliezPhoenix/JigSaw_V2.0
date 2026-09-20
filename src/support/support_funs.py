@@ -875,15 +875,17 @@ def draw_detection_results(image_result: np.ndarray, product: 'data_structure.Pr
             if len(box_points) >= 4:
                 x, y, w, h = box_points[0], box_points[1], box_points[2], box_points[3]
                 x, y, w, h = float(x), float(y), float(w), float(h)
-                x1, y1 = int(x), int(y)
-                x2, y2 = int(x + w), int(y + h)
-                # 边界检查
-                x1 = max(0, min(x1, img_w-1))
-                y1 = max(0, min(y1, img_h-1))
-                x2 = max(0, min(x2, img_w-1))
-                y2 = max(0, min(y2, img_h-1))
-                cv.rectangle(image_result, (x1, y1), (x2, y2), 
-                            COLOR_GREEN if is_valid else COLOR_RED,2)
+                if w > 0 and h > 0:
+                    x1, y1 = int(x), int(y)
+                    x2, y2 = int(x + w), int(y + h)
+                    x1 = max(0, min(x1, img_w-1))
+                    y1 = max(0, min(y1, img_h-1))
+                    x2 = max(0, min(x2, img_w-1))
+                    y2 = max(0, min(y2, img_h-1))
+                    cv.rectangle(
+                        image_result, (x1, y1), (x2, y2),
+                        COLOR_GREEN if is_valid else COLOR_RED, 2,
+                    )
         except Exception as e:
             error_messages.append(f"绘制尺寸结果错误: {e}")
     
@@ -1017,7 +1019,8 @@ def execute_product_detection(
     
     Returns:
         tuple: (success: bool, msg: str, product: data_structure.Product)
-            - success: bool 是否成功执行（False 表示某检测器返回 error_code != 0）
+            - success: bool 配置是否可执行（False 表示检测器缺失等）；检测器
+              error_code != 0 记为对应 NG 并返回 True，结果写入 product 对应字段
             - msg: str 消息（错误信息或成功信息）
             - product: data_structure.Product 产品数据类，字段包含：
                 - defect_type: list 缺陷类型列表，如 ["OK"] 或 ["NG", "Size"]
@@ -1055,6 +1058,11 @@ def execute_product_detection(
         if "OK" in defect_type:
             defect_type.remove("OK")
 
+    def _early_ng():
+        product.defect_type = defect_type
+        product.product_image_result = image.copy()
+        return True, "成功", product
+
     ball_ran = False
     size_ran = False
 
@@ -1083,20 +1091,21 @@ def execute_product_detection(
         if mark_detector is None:
             return _fail("mark_detector 未提供")
         mark_result = mark_detector.detect(image_for_detection)
-        if mark_result.error_code != 0:
-            return _fail(f"Mark检测失败: {mark_result.error_msg}")
         product.mark_result = mark_result
-
-        allow_mark = params.get("allow_mark", False)
-        is_valid = mark_result.is_valid
-        # allow_mark==True: 有Mark为OK，无Mark为NG；allow_mark==False: 有Mark为NG
-        if (allow_mark and not is_valid) or ((not allow_mark) and is_valid):
+        if mark_result.error_code != 0:
             _mark_ng()
             defect_type.append("Mark")
             if early_return_on_ng:
-                product.defect_type = defect_type
-                product.product_image_result = image.copy()
-                return True, "成功", product
+                return _early_ng()
+        else:
+            allow_mark = params.get("allow_mark", False)
+            is_valid = mark_result.is_valid
+            # allow_mark==True: 有Mark为OK，无Mark为NG；allow_mark==False: 有Mark为NG
+            if (allow_mark and not is_valid) or ((not allow_mark) and is_valid):
+                _mark_ng()
+                defect_type.append("Mark")
+                if early_return_on_ng:
+                    return _early_ng()
 
     # 尺寸检测
     if size_check_enable:
@@ -1104,17 +1113,19 @@ def execute_product_detection(
         if size_detector is None:
             return _fail("size_detector 未提供")
         size_result = size_detector.detect(image_for_detection)
-        if size_result.error_code != 0:
-            return _fail(f"Size检测失败: {size_result.error_msg}")
         product.size_result = size_result
-        size_ran = True
-        if not size_result.is_valid:
+        if size_result.error_code != 0:
             _mark_ng()
             defect_type.append("Size")
             if early_return_on_ng:
-                product.defect_type = defect_type
-                product.product_image_result = image.copy()
-                return True, "成功", product
+                return _early_ng()
+        else:
+            size_ran = True
+            if not size_result.is_valid:
+                _mark_ng()
+                defect_type.append("Size")
+                if early_return_on_ng:
+                    return _early_ng()
 
     # 锡球检测
     if ball_check_enable:
@@ -1122,22 +1133,23 @@ def execute_product_detection(
         if ball_detector is None:
             return _fail("ball_detector 未提供")
         ball_result = ball_detector.detect(image_for_detection)
-        if ball_result.error_code != 0:
-            return _fail(f"Ball检测失败: {ball_result.error_msg}")
         product.ball_result = ball_result
-        ball_ran = True
-        if not ball_result.is_valid:
+        if ball_result.error_code != 0:
             _mark_ng()
-            # 数量问题 vs 面积问题
-            expected_count = ball_detector.params.get("expected_ball_count", 0)
-            if ball_result.ball_count != expected_count:
-                defect_type.append("Ball Count")
-            else:
-                defect_type.append("Ball_Area")
+            defect_type.append("Ball Count")
             if early_return_on_ng:
-                product.defect_type = defect_type
-                product.product_image_result = image.copy()
-                return True, "成功", product
+                return _early_ng()
+        else:
+            ball_ran = True
+            if not ball_result.is_valid:
+                _mark_ng()
+                expected_count = ball_detector.params.get("expected_ball_count", 0)
+                if ball_result.ball_count != expected_count:
+                    defect_type.append("Ball Count")
+                else:
+                    defect_type.append("Ball_Area")
+                if early_return_on_ng:
+                    return _early_ng()
 
     # 偏移检测（需要 ball 与 size 检测均已执行）
     if shift_check_enable and ball_ran and size_ran:
@@ -1145,16 +1157,17 @@ def execute_product_detection(
         if shift_detector is None:
             return _fail("shift_detector 未提供")
         shift_result = shift_detector.detect(product.ball_result, product.size_result)
-        if shift_result.error_code != 0:
-            return _fail(f"Shift检测失败: {shift_result.error_msg}")
         product.shift_result = shift_result
-        if not shift_result.is_valid:
+        if shift_result.error_code != 0:
             _mark_ng()
             defect_type.append("Shift")
             if early_return_on_ng:
-                product.defect_type = defect_type
-                product.product_image_result = image.copy()
-                return True, "成功", product
+                return _early_ng()
+        elif not shift_result.is_valid:
+            _mark_ng()
+            defect_type.append("Shift")
+            if early_return_on_ng:
+                return _early_ng()
 
     # 划痕检测
     if scratch_check_enable:
@@ -1162,16 +1175,17 @@ def execute_product_detection(
         if scratch_detector is None:
             return _fail("scratch_detector 未提供")
         scratch_result = scratch_detector.detect(image_for_detection)
-        if scratch_result.error_code != 0:
-            return _fail(f"Scratch检测失败: {scratch_result.error_msg}")
         product.scratch_result = scratch_result
-        if not scratch_result.is_valid:
+        if scratch_result.error_code != 0:
             _mark_ng()
             defect_type.append("Scratch")
             if early_return_on_ng:
-                product.defect_type = defect_type
-                product.product_image_result = image.copy()
-                return True, "成功", product
+                return _early_ng()
+        elif not scratch_result.is_valid:
+            _mark_ng()
+            defect_type.append("Scratch")
+            if early_return_on_ng:
+                return _early_ng()
 
     # 更新总体判定
     if len(defect_type) > 1:
@@ -1222,19 +1236,245 @@ def overlay_bgr_patch(base, patch, origin_x, origin_y):
     return display
 
 
-def resolve_product_overlay_patch(product) -> Optional[np.ndarray]:
-    """取 product_image_result；缺失时按检测结果现场绘制。"""
-    if product.product_image_result is not None:
-        return product.product_image_result
-    if product.product_image is None:
+def size_result_has_measurement(size_result) -> bool:
+    """是否已有一次尺寸检测产出（含算法失败）。默认空实例返回 False。"""
+    if size_result is None:
+        return False
+    if int(getattr(size_result, "error_code", 0) or 0) != 0:
+        return True
+    if abs(float(getattr(size_result, "width", 0.0) or 0.0)) > 1e-12:
+        return True
+    if abs(float(getattr(size_result, "height", 0.0) or 0.0)) > 1e-12:
+        return True
+    box = list(getattr(size_result, "box_points", None) or [])
+    return len(box) >= 4 and float(box[2]) > 0 and float(box[3]) > 0
+
+
+def shift_result_has_measurement(shift_result) -> bool:
+    """是否已有一次偏移检测产出。默认 (0,0) 中心视为未跑过。"""
+    if shift_result is None:
+        return False
+    if int(getattr(shift_result, "error_code", 0) or 0) != 0:
+        return True
+    if abs(float(getattr(shift_result, "shift_x_mm", 0.0) or 0.0)) > 1e-12:
+        return True
+    if abs(float(getattr(shift_result, "shift_y_mm", 0.0) or 0.0)) > 1e-12:
+        return True
+    ball_center = getattr(shift_result, "ball_center", None) or (0.0, 0.0)
+    size_center = getattr(shift_result, "size_center", None) or (0.0, 0.0)
+    if len(ball_center) >= 2 and (abs(float(ball_center[0])) > 1e-12 or abs(float(ball_center[1])) > 1e-12):
+        return True
+    if len(size_center) >= 2 and (abs(float(size_center[0])) > 1e-12 or abs(float(size_center[1])) > 1e-12):
+        return True
+    return False
+
+
+def _ball_result_is_empty(ball_result) -> bool:
+    if ball_result is None:
+        return True
+    if int(getattr(ball_result, "error_code", 0) or 0) != 0:
+        return False
+    if getattr(ball_result, "ball_contour", None) or getattr(ball_result, "ng_ball_contour", None):
+        return False
+    return int(getattr(ball_result, "ball_count", 0) or 0) == 0
+
+
+def product_needs_display_refresh(product) -> bool:
+    """点击查看时：尺寸未落盘，或尺寸算法失败导致后续检测没跑。"""
+    if product is None or getattr(product, "product_image", None) is None:
+        return False
+    size_result = getattr(product, "size_result", None)
+    if not size_result_has_measurement(size_result):
+        return True
+    if int(getattr(size_result, "error_code", 0) or 0) != 0 and _ball_result_is_empty(
+        getattr(product, "ball_result", None)
+    ):
+        return True
+    return False
+
+
+def _product_mark_color(product) -> str:
+    defect_type = getattr(product, "defect_type", None) or ["OK"]
+    return "green" if list(defect_type)[:1] == ["OK"] else "red"
+
+
+def paint_product_image_result(product, source_image=None, mark_color: str = None):
+    """按当前检测结果重绘 product_image_result，供产线落盘与点击叠加共用。"""
+    if product is None:
         return None
-    mark_color = "green" if product.defect_type == ["OK"] else "red"
+    src = source_image
+    if src is None:
+        src = getattr(product, "product_image", None)
+    if src is None:
+        src = getattr(product, "product_image_result", None)
+    if src is None:
+        return None
+    color = mark_color if mark_color is not None else _product_mark_color(product)
     _, _, patch = draw_detection_results(
-        ensure_bgr_u8(product.product_image, copy=True),
-        product,
-        mark_color=mark_color,
+        ensure_bgr_u8(src, copy=True), product, mark_color=color
     )
-    return patch
+    if patch is not None:
+        product.product_image_result = patch
+        return patch
+    if getattr(product, "product_image_result", None) is None:
+        product.product_image_result = ensure_bgr_u8(src, copy=True)
+    return product.product_image_result
+
+
+def resolve_product_overlay_patch(product) -> Optional[np.ndarray]:
+    """点击叠加：始终按检测结果现场绘制，避免沿用未画框的原图副本。"""
+    return paint_product_image_result(product)
+
+
+def refresh_product_results_for_display(product, detectors: dict, params: dict) -> bool:
+    """为点击显示补跑检测（不改 defect_type / 料带颜色）。"""
+    if product is None or getattr(product, "product_image", None) is None:
+        return False
+    if not product_needs_display_refresh(product):
+        paint_product_image_result(product)
+        return False
+    _, _, detected = execute_product_detection(
+        image=product.product_image,
+        detectors=detectors,
+        params=params,
+        detect_type=None,
+        early_return_on_ng=False,
+        error_callback=None,
+    )
+    product.size_result = detected.size_result
+    product.ball_result = detected.ball_result
+    product.mark_result = detected.mark_result
+    product.shift_result = detected.shift_result
+    product.scratch_result = detected.scratch_result
+    paint_product_image_result(product)
+    return True
+
+
+_HUD_GAP = 8
+_HUD_MIN_FONT = 0.6
+_HUD_MAX_FONT = 3.0
+_HUD_LINE = 40
+_HUD_PAD_Y = 24
+_HUD_WIDTH_PER_SCALE = 16 * 22
+_HUD_MIN_RIGHT_GAP = 24
+
+
+def _preferred_metrics_font(img_w, img_h):
+    return float(max(_HUD_MIN_FONT, min(_HUD_MAX_FONT, min(img_w, img_h) / 400.0)))
+
+
+def _metrics_panel_metrics(font_scale, n_lines):
+    line_h = max(10, int(round(_HUD_LINE * font_scale)))
+    panel_h = line_h * n_lines + _HUD_PAD_Y
+    panel_w = max(int(round(80 * font_scale / _HUD_MIN_FONT)), int(round(_HUD_WIDTH_PER_SCALE * font_scale)))
+    thickness = max(1, int(round(font_scale)))
+    return panel_w, panel_h, line_h, thickness
+
+
+def _shrink_metrics_font(n_lines, max_w, max_h, preferred):
+    font = float(preferred)
+    max_w = max(1, int(max_w))
+    max_h = max(1, int(max_h))
+    while font > _HUD_MIN_FONT + 1e-6:
+        panel_w, panel_h, line_h, thickness = _metrics_panel_metrics(font, n_lines)
+        if panel_w <= max_w and panel_h <= max_h:
+            return font, panel_w, panel_h, line_h, thickness
+        font = max(_HUD_MIN_FONT, font * 0.85)
+    panel_w, panel_h, line_h, thickness = _metrics_panel_metrics(_HUD_MIN_FONT, n_lines)
+    panel_w = min(panel_w, max_w)
+    panel_h = min(panel_h, max_h)
+    return _HUD_MIN_FONT, panel_w, panel_h, line_h, thickness
+
+
+def layout_dry_metrics_panel(img_w, img_h, prod_x, prod_y, w, h, n_lines):
+    """产品右侧读数面板：先缩小塞进右侧空隙，不够则盖住产品右侧。垂直对齐 prod_y+h/10。"""
+    img_w, img_h = int(img_w), int(img_h)
+    prod_x, prod_y, w, h = int(prod_x), int(prod_y), int(w), int(h)
+    n_lines = max(1, int(n_lines))
+    preferred = _preferred_metrics_font(img_w, img_h)
+    prod_right = prod_x + w
+    right_gap = img_w - prod_right - _HUD_GAP
+    preferred_y = int(prod_y + h / 10.0)
+
+    if right_gap >= _HUD_MIN_RIGHT_GAP:
+        font, panel_w, panel_h, line_h, thickness = _shrink_metrics_font(
+            n_lines, right_gap, img_h, preferred
+        )
+        ox = prod_right + _HUD_GAP
+        if ox + panel_w > img_w:
+            ox = max(0, img_w - panel_w)
+    else:
+        max_w = max(1, min(max(w, 1), img_w))
+        font, panel_w, panel_h, line_h, thickness = _shrink_metrics_font(
+            n_lines, max_w, img_h, preferred
+        )
+        ox = prod_right - panel_w
+        if ox < prod_x:
+            ox = prod_x
+        if ox < 0:
+            ox = 0
+        if ox + panel_w > img_w:
+            panel_w = max(1, img_w - ox)
+
+    oy = preferred_y
+    if oy + panel_h > img_h:
+        oy = max(0, img_h - panel_h)
+    if oy < 0:
+        oy = 0
+    return ox, oy, panel_w, panel_h, font, thickness, line_h
+
+
+def draw_dry_product_metrics(display_image, product, prod_x, prod_y, w, h):
+    """在产品右侧绘制尺寸/偏移读数（同一黑底面板）。"""
+    if display_image is None or product is None:
+        return display_image
+    img_h, img_w = display_image.shape[:2]
+    if img_w < 8 or img_h < 8:
+        return display_image
+
+    lines = []
+
+    size_result = getattr(product, "size_result", None)
+    if size_result_has_measurement(size_result) and int(size_result.error_code or 0) == 0:
+        color = (0, 255, 0) if size_result.is_valid else (0, 0, 255)
+        lines.append(("Size_Data", color))
+        lines.append((f"W: {size_result.width:.3f}mm", color))
+        lines.append((f"H: {size_result.height:.3f}mm", color))
+    elif size_result is not None and int(getattr(size_result, "error_code", 0) or 0) != 0:
+        lines.append(("NO SIZE", (0, 0, 255)))
+        err = str(getattr(size_result, "error_msg", "") or "").strip()
+        if err:
+            lines.append((err[:48], (0, 0, 255)))
+    else:
+        lines.append(("NO SIZE", (0, 0, 255)))
+
+    shift_result = getattr(product, "shift_result", None)
+    if shift_result_has_measurement(shift_result) and int(shift_result.error_code or 0) == 0:
+        color = (0, 255, 0) if shift_result.is_valid else (0, 0, 255)
+        lines.append(("Shift_Data", color))
+        lines.append((f"X: {shift_result.shift_x_mm:.3f}mm", color))
+        lines.append((f"Y: {shift_result.shift_y_mm:.3f}mm", color))
+
+    if not lines:
+        return display_image
+
+    ox, oy, panel_w, panel_h, font_scale, thickness, line_h = layout_dry_metrics_panel(
+        img_w, img_h, prod_x, prod_y, w, h, len(lines)
+    )
+    x2 = min(img_w - 1, ox + panel_w)
+    y2 = min(img_h - 1, oy + panel_h)
+    cv.rectangle(display_image, (ox, oy), (x2, y2), (0, 0, 0), -1)
+    text_x = ox + 10
+    text_y = oy + line_h
+    for text, color in lines:
+        if text_y >= img_h - 2:
+            break
+        cv.putText(
+            display_image, text, (text_x, text_y),
+            cv.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness,
+        )
+        text_y += line_h
+    return display_image
 
 
 # ==================== 满盘检测深度学习模型相关函数 ====================

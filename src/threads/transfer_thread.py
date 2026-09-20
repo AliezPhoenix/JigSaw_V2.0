@@ -614,14 +614,9 @@ class TransferThread(QThread):
         # 添加位置信息与原图裁剪（用于单格交互显示）
         product.product_position = [x, y, product_image.shape[1], product_image.shape[0]]
         product.product_image = product_image.copy()
-        
-        # 如果检测失败，直接返回
+        paint_product_image_result(product, product_image, mark_color="green")
         if not success:
             return False, msg, product
-        
-        # 绘制检测结果
-        product.product_image_result = self.draw_detection_results(product_image, product)
-        
         return True, "成功", product
 
     #——————————————————————————————绘制检测结果函数————————————————————————————————————————————————————————————————————

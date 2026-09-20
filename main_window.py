@@ -37,6 +37,9 @@ from src.support.support_funs import (
     crop_product_context_region,
     overlay_bgr_patch,
     resolve_product_overlay_patch,
+    refresh_product_results_for_display,
+    draw_dry_product_metrics,
+    paint_product_image_result,
 )
 from src.support.bga_strip import BGA_STRIP as Bga_Strip
 from src.support.InteractiveBgaLabel import InteractiveBgaLabel
@@ -68,6 +71,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
 
         _report(5, "加载界面...")
         self.setupUi(self)
+        self._start_header_clock()
         self.current_image = {
             "dry": None,
             "transfer": None,
@@ -179,7 +183,17 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         _report(85, "初始化统计表格...")
         self._init_statistics_table()
         _report(95, "加载配方")
-        
+
+    def _start_header_clock(self):
+        self._clock_timer = QTimer(self)
+        self._clock_timer.setTimerType(Qt.CoarseTimer)
+        self._clock_timer.timeout.connect(self._refresh_header_clock)
+        self._clock_timer.start(1000)
+        self._refresh_header_clock()
+
+    def _refresh_header_clock(self):
+        self.label_time.setText(time.strftime("%Y-%m-%d %H:%M:%S"))
+
     def _init_statistics_table(self):
         """初始化统计表格：设置表头、固定行标签、只读"""
         tbl = self.tableWidget_statistics
@@ -1348,6 +1362,40 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             return None, "产品位置信息不完整或尺寸无效❌"
         return bbox, None
 
+    def _detectors_and_params_for_click(self, work_position):
+        """点击补绘用独立检测器副本，避免和产线线程抢同一实例。"""
+        alias = "dry_thread" if work_position == "dry" else "transfer_thread"
+        thread = self.thread_manager.get_thread_obj(alias) if self.thread_manager else None
+        if thread is None:
+            return None, None
+        size_detector = SizeDetector()
+        size_detector.update_params(dict(getattr(thread, "size_detect_params", {}) or {}))
+        ball_detector = BallDetector()
+        ball_detector.update_params(dict(getattr(thread, "ball_detect_params", {}) or {}))
+        mark_detector = MarkDetector()
+        mark_detector.update_params(dict(getattr(thread, "mark_detect_params", {}) or {}))
+        shift_detector = ShiftDetector()
+        shift_detector.update_params(dict(getattr(thread, "shift_detect_params", {}) or {}))
+        scratch_detector = ScratchDetector()
+        scratch_detector.update_params(dict(getattr(thread, "scratch_detect_params", {}) or {}))
+        thread_params = getattr(thread, "params", {}) or {}
+        detect_params = {
+            "mark_check_enable": thread_params.get("mark_check_enable", True),
+            "size_check_enable": thread_params.get("size_check_enable", True),
+            "ball_check_enable": thread_params.get("ball_check_enable", True),
+            "shift_check_enable": thread_params.get("shift_check_enable", True),
+            "scratch_check_enable": thread_params.get("scratch_check_enable", True),
+            "allow_mark": work_position != "dry",
+            "roi_block": thread_params.get("roi_block", []),
+        }
+        return {
+            "ball_detector": ball_detector,
+            "size_detector": size_detector,
+            "mark_detector": mark_detector,
+            "shift_detector": shift_detector,
+            "scratch_detector": scratch_detector,
+        }, detect_params
+
     def on_bga_region_clicked(self, pos_start, work_position="dry"):
         """BGA区域点击：3倍 product 裁剪原图写入 current_image，叠加 result 后显示。"""
         try:
@@ -1377,31 +1425,16 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
 
             self.selected_product_frame_image[work_position] = ensure_bgr_u8(frame_image, copy=True)
             self.current_image[work_position] = cropped
+            if work_position == "dry":
+                detectors, detect_params = self._detectors_and_params_for_click(work_position)
+                if detectors is not None:
+                    refresh_product_results_for_display(product, detectors, detect_params)
             display_image = overlay_bgr_patch(
                 cropped, resolve_product_overlay_patch(product), prod_x, prod_y
             )
             if work_position == "dry":
-                if product.size_result.error_code == 0:
-                    if product.size_result.is_valid:
-                        color = (0,255,0) # green
-                    else:
-                        color = (0,0,255) #red
-                    cv.rectangle(display_image,((int(prod_x + w -20), int(prod_y+h/10-80))),(int(prod_x + w*1.8), int(prod_y+h/10+250)),(0,0,0),-1)
-                    cv.putText(display_image, "Size_Data", (int(prod_x + w), int(prod_y+h/10)), cv.FONT_HERSHEY_SIMPLEX, 3,color, 4)
-                    cv.putText(display_image, f"W: {product.size_result.width:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 100)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
-                    cv.putText(display_image, f"H: {product.size_result.height:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 200)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
-                else:
-                    cv.putText(display_image, "NO SIZE", (int(prod_x+w), int(prod_y)), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                if product.shift_result.error_code ==0:
-                    if product.shift_result.is_valid:
-                        color = (0,255,0) # green
-                    else:
-                        color = (0,0,255) #red
-                    cv.rectangle(display_image,((int(prod_x + w -20), int(prod_y+h/10+320))),(int(prod_x + w*1.8), int(prod_y+h/10+650)),(0,0,0),-1)
-                    cv.putText(display_image, "Shift_Data", (int(prod_x + w), int(prod_y+h/10+400)), cv.FONT_HERSHEY_SIMPLEX, 3,color, 4)
-                    cv.putText(display_image, f"X: {product.shift_result.shift_x_mm:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 500)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
-                    cv.putText(display_image, f"Y: {product.shift_result.shift_y_mm:.3f}mm", (int(prod_x + w ), int(prod_y+h/10 + 600)), cv.FONT_HERSHEY_SIMPLEX, 3, color, 4)
-                
+                draw_dry_product_metrics(display_image, product, prod_x, prod_y, w, h)
+
             label_name = getattr(self, f"label_current_cam_live_{work_position}")
             self._update_label_from_image(label_name, display_image)
         except Exception as e:
@@ -1742,16 +1775,13 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
                 product.product_position = [x, y, template_w, template_h]
                 product.product_image = product_image.copy()
                 slot[gr][gcol] = product
-                if not success:
-                    continue
-                _, _, drawn_patch = draw_detection_results(
-                    product_image.copy(),
+                paint_product_image_result(
                     product,
+                    product_image,
                     mark_color="green" if product.defect_type == ["OK"] else "red",
                 )
-                if drawn_patch is not None:
-                    product.product_image_result = drawn_patch.copy()
-                    image_result[y:y + template_h, x:x + template_w] = drawn_patch
+                if product.product_image_result is not None:
+                    image_result[y:y + template_h, x:x + template_w] = product.product_image_result
                     image_result = cv.rectangle(
                         image_result, (x, y), (x + template_w, y + template_h), (0, 255, 255), 4
                     )

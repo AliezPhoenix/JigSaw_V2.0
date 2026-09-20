@@ -121,6 +121,7 @@ class ImageViewerWidget(QWidget):
         
         # 删除按钮
         self.delete_btn = QPushButton("删除选中")
+        self.delete_btn.setObjectName("delete_btn")
         self.delete_btn.clicked.connect(self.delete_selected)
         self.delete_btn.setEnabled(False)
         
@@ -176,16 +177,8 @@ class ImageViewerWidget(QWidget):
         info_layout = QVBoxLayout()
         
         self.info_label = QLabel("未选择图像")
+        self.info_label.setObjectName("info_label")
         self.info_label.setWordWrap(True)
-        # 信息标签使用适当的样式，与主题保持一致
-        self.info_label.setStyleSheet("""
-            QLabel {
-                padding: 10px;
-                border-radius: 4px;
-                font-size: 11pt;
-                line-height: 1.6;
-            }
-        """)
         self.info_label.setMinimumHeight(150)
         
         info_layout.addWidget(self.info_label)

@@ -19,6 +19,7 @@ from openpyxl import load_workbook
 
 from src.support.log_utils import parse_log_excel, merge_log_infos, write_log_to_excel
 from src.support.support_funs import sanitize_filename_part
+from ui.theme import bind as bind_theme
 
 
 class BatchSummaryDialog(QDialog):
@@ -166,8 +167,8 @@ class LogViewerWidget(QWidget):
         
         # 删除按钮
         self.delete_btn = QPushButton("删除选中文件")
+        self.delete_btn.setObjectName("delete_btn")
         self.delete_btn.clicked.connect(self.delete_selected_log)
-        self.delete_btn.setStyleSheet("QPushButton { background-color: #f44336; color: white; }")
         
         button_layout.addWidget(self.open_btn)
         button_layout.addWidget(self.delete_btn)
@@ -195,6 +196,7 @@ class LogViewerWidget(QWidget):
         content_layout.addWidget(content_group, 2)
         
         main_layout.addLayout(content_layout)
+        bind_theme(self)
     
     def _update_folder_display(self):
         """更新文件夹路径显示"""

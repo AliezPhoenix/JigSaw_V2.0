@@ -5,10 +5,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QPalette
 from PyQt5.QtWidgets import (
     QApplication,
     QLabel,
+    QPushButton,
     QRadioButton,
     QStyle,
     QStyleOptionButton,
@@ -20,14 +21,29 @@ from PyQt5.QtWidgets import (
 from ui.theme import PALETTE, apply, bind, role_qss, stylesheet
 
 
-def test_tactical_telemetry_palette():
-    assert PALETTE["accent"].upper() == "#E61919"
-    assert PALETTE["ok"].upper() == "#4AF626"
-    compact = stylesheet().replace(" ", "").lower()
+def test_operator_safe_palette_keeps_red_for_alarms():
+    assert PALETTE["accent"].upper() == "#D4A017"
+    assert PALETTE["alarm"].upper() == "#C62828"
+    assert PALETTE["bg"].upper() == "#1E252B"
+    qss = stylesheet()
+    chrome = qss.lower()
+    default_button = chrome.split('qpushbutton[jigsawrole="danger"]')[0]
+    assert PALETTE["alarm"].lower() not in default_button
+    assert 'QPushButton[jigsawRole="danger"]' in qss
+    assert PALETTE["accent"].lower() in chrome
+    compact = "".join(qss.split()).lower()
     assert "border-radius:4px" not in compact
-    assert "border-radius:8px" in compact
+    assert "border-radius:9px" in compact
+    assert f"border-top:1pxsolid{PALETTE['border_hi'].lower()}" in compact
+    assert "min-height:32px" in compact
     assert PALETTE["accent"] in role_qss("idle")
+    assert PALETTE["preview"] in role_qss("idle")
+    assert PALETTE["alarm"] not in role_qss("idle")
+    assert PALETTE["alarm"] not in role_qss("alert")
     assert PALETTE["ok"] in role_qss("running")
+    assert PALETTE["ok"] in role_qss("ok")
+    assert PALETTE["alarm"] in role_qss("ng")
+    assert PALETTE["alarm"] in role_qss("disconnected")
 
 
 
@@ -65,6 +81,19 @@ def test_stylesheet_paints_radio_indicator_without_svg_image():
     assert "QCheckBox::indicator:checked" in qss
     assert "image:" not in qss.replace(" ", "").lower()
     assert PALETTE["accent"].lower() in qss.lower()
+
+
+def test_inactive_palette_keeps_light_text():
+    app = _app()
+    apply(app)
+    pal = app.palette()
+    active = pal.color(QPalette.Active, QPalette.Text)
+    inactive = pal.color(QPalette.Inactive, QPalette.Text)
+    disabled = pal.color(QPalette.Disabled, QPalette.Text)
+    assert active.lightness() > 160
+    assert inactive.lightness() > 160
+    assert disabled.lightness() > 90
+    assert "Microsoft YaHei UI" in stylesheet()
 
 
 def test_apply_does_not_use_qt_material():
@@ -162,6 +191,23 @@ def test_bind_does_not_tag_status_label_as_preview():
     bind(host)
     assert status.property("jigsawRole") != "preview"
     assert "background-color: #2b2b2b" in status.styleSheet()
+
+
+def test_bind_clears_info_label_and_tags_action_roles():
+    app = _app()
+    apply(app)
+    host = QWidget()
+    info = QLabel(host)
+    info.setObjectName("info_label")
+    info.setStyleSheet("color: white; padding: 5px;")
+    connect = QPushButton("连接相机", host)
+    connect.setObjectName("pushButton_connect")
+    delete = QPushButton("删除选中文件", host)
+    delete.setObjectName("delete_btn")
+    bind(host)
+    assert info.styleSheet() == ""
+    assert connect.property("jigsawRole") == "primary"
+    assert delete.property("jigsawRole") == "danger"
 
 
 def test_main_entry_does_not_import_qt_material():

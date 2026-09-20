@@ -12,6 +12,7 @@ class WestTabBar(QtWidgets.QTabBar):
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.Antialiasing, False)
         try:
+            painter.fillRect(self.rect(), QtGui.QColor(PALETTE["tab_bg"]))
             option = QtWidgets.QStyleOptionTab()
             for index in range(self.count()):
                 self.initStyleOption(option, index)
@@ -20,13 +21,16 @@ class WestTabBar(QtWidgets.QTabBar):
                 fill = QtGui.QColor(PALETTE["tab_selected"] if selected else PALETTE["tab_bg"])
                 text = QtGui.QColor(PALETTE["text"] if selected else PALETTE["text_muted"])
                 painter.fillRect(rect, fill)
-                painter.setPen(QtGui.QColor(PALETTE["border"]))
+                painter.setPen(QtGui.QColor(PALETTE["border_lo"]))
                 painter.drawLine(rect.bottomLeft(), rect.bottomRight())
                 if selected:
+                    painter.setPen(QtGui.QColor(PALETTE["border_hi"]))
+                    painter.drawLine(rect.topLeft(), rect.topRight())
                     edge = QtCore.QRect(rect.right() - 4, rect.top(), 4, rect.height())
                     painter.fillRect(edge, QtGui.QColor(PALETTE["accent"]))
                 font = painter.font()
                 font.setBold(selected)
+                font.setPointSize(11)
                 font.setLetterSpacing(QtGui.QFont.PercentageSpacing, 106)
                 painter.setFont(font)
                 painter.setPen(text)

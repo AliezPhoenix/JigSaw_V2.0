@@ -6,7 +6,7 @@ from pathlib import Path
 
 import cv2 as cv
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QImage, QPixmap
+from PyQt5.QtGui import QBrush, QColor, QImage, QPixmap
 from PyQt5.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
 )
 
 from src.fulltray_dl.cell_extract import extract_cells_from_roi
+from ui.theme import PALETTE, bind as bind_theme
 
 IMAGE_EXTENSIONS = {".bmp", ".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
@@ -66,20 +67,22 @@ class CellLabelDialog(QDialog):
     self.label_params = QLabel(
       f"行={self.rows}  列={self.cols}  ROI={roi_text}  input_size={self.input_size}"
     )
-    self.label_params.setStyleSheet("font-weight: bold;")
+    self.label_params.setObjectName("label_params")
+    font = self.label_params.font()
+    font.setBold(True)
+    self.label_params.setFont(font)
     top.addWidget(self.label_params)
 
     self.label_stats = QLabel("")
-    self.label_stats.setStyleSheet("color: blue;")
     top.addWidget(self.label_stats)
     layout.addLayout(top)
 
     mid = QHBoxLayout()
     image_col = QVBoxLayout()
     self.label_image = QLabel("图像将显示在这里")
+    self.label_image.setObjectName("label_image_show_cell")
     self.label_image.setMinimumSize(560, 400)
     self.label_image.setAlignment(Qt.AlignCenter)
-    self.label_image.setStyleSheet("border: 1px solid gray; background: #f0f0f0;")
     image_col.addWidget(self.label_image)
     self.label_image_info = QLabel("")
     self.label_image_info.setAlignment(Qt.AlignCenter)
@@ -89,13 +92,13 @@ class CellLabelDialog(QDialog):
     right = QVBoxLayout()
     self.btn_has_product = QPushButton("有产品 (1)")
     self.btn_has_product.setMinimumHeight(50)
-    self.btn_has_product.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+    self.btn_has_product.setProperty("jigsawRole", "pass")
     self.btn_has_product.clicked.connect(lambda: self.label_current("has_product"))
     right.addWidget(self.btn_has_product)
 
     self.btn_empty = QPushButton("无产品 (2)")
     self.btn_empty.setMinimumHeight(50)
-    self.btn_empty.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
+    self.btn_empty.setProperty("jigsawRole", "danger")
     self.btn_empty.clicked.connect(lambda: self.label_current("empty"))
     right.addWidget(self.btn_empty)
 
@@ -125,7 +128,7 @@ class CellLabelDialog(QDialog):
     self.btn_save.clicked.connect(self.save_labels)
     bottom.addWidget(self.btn_save)
     self.btn_export = QPushButton("导出到训练集")
-    self.btn_export.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
+    self.btn_export.setProperty("jigsawRole", "primary")
     self.btn_export.clicked.connect(self.export_to_dataset)
     bottom.addWidget(self.btn_export)
     layout.addLayout(bottom)
@@ -134,6 +137,7 @@ class CellLabelDialog(QDialog):
     self.btn_empty.setShortcut("2")
     self.btn_next.setShortcut(Qt.Key_Right)
     self.btn_prev.setShortcut(Qt.Key_Left)
+    bind_theme(self)
 
   def _update_extract_button_state(self):
     has_image = False
@@ -209,16 +213,22 @@ class CellLabelDialog(QDialog):
     for i, file_path in enumerate(self.image_files):
       filename = os.path.basename(file_path)
       item = QListWidgetItem(f"{i + 1}. {filename}")
+      marker = ">" if i == self.current_index else " "
       if filename in self.labels:
         label = self.labels[filename]
         if label == "has_product":
-          item.setBackground(Qt.green)
-          item.setText(f"{i + 1}. {filename} [有产品]")
+          item.setBackground(QBrush(QColor(PALETTE["ok"])))
+          item.setForeground(QColor(PALETTE["ink"]))
+          item.setText(f"{marker} {i + 1}. {filename} [有产品]")
         elif label == "empty":
-          item.setBackground(Qt.red)
-          item.setText(f"{i + 1}. {filename} [无产品]")
-      if i == self.current_index:
-        item.setBackground(Qt.yellow)
+          item.setBackground(QBrush(QColor(PALETTE["alarm"])))
+          item.setForeground(QColor(PALETTE["text"]))
+          item.setText(f"{marker} {i + 1}. {filename} [无产品]")
+      else:
+        item.setText(f"{marker} {i + 1}. {filename}")
+      if i == self.current_index and filename not in self.labels:
+        item.setBackground(QBrush(QColor(PALETTE["accent"])))
+        item.setForeground(QColor(PALETTE["ink"]))
       self.list_files.addItem(item)
 
   def update_image_display(self):

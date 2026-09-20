@@ -44,6 +44,7 @@ from src.support.support_funs import (
     value_transmit,
     draw_detection_results,
     execute_product_detection,
+    paint_product_image_result,
     sanitize_filename_part,
     ensure_gray_u8,
     ensure_bgr_u8,

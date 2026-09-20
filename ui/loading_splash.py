@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """启动加载进度条窗口"""
-from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QProgressBar
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QProgressBar, QFrame
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
 
 
 class LoadingSplashScreen(QWidget):
@@ -12,18 +11,23 @@ class LoadingSplashScreen(QWidget):
         super().__init__(parent)
         self.setWindowFlags(Qt.SplashScreen | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground, False)
-        self.setFixedSize(420, 160)
+        self.setFixedSize(460, 168)
         self._setup_ui()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(10)
+        layout.setContentsMargins(24, 20, 24, 20)
 
-        title = QLabel("JigSaw 正在启动...")
-        title.setFont(QFont("Microsoft YaHei", 14, QFont.Bold))
-        title.setAlignment(Qt.AlignCenter)
+        title = QLabel("JigSaw 正在启动")
+        title.setObjectName("splashTitle")
+        title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         layout.addWidget(title)
+
+        rule = QFrame()
+        rule.setObjectName("splashRule")
+        rule.setFrameShape(QFrame.NoFrame)
+        layout.addWidget(rule)
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setMinimum(0)
@@ -34,9 +38,9 @@ class LoadingSplashScreen(QWidget):
         self._progress_bar.setMinimumHeight(24)
         layout.addWidget(self._progress_bar)
 
-        self._status_label = QLabel("初始化中...")
+        self._status_label = QLabel("初始化中")
         self._status_label.setObjectName("splashStatus")
-        self._status_label.setAlignment(Qt.AlignCenter)
+        self._status_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         layout.addWidget(self._status_label)
 
     def update_progress(self, percent: int, message: str = ""):
