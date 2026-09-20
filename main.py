@@ -1,13 +1,13 @@
 from main_window import MainWindow
 from PyQt5.QtWidgets import QApplication
 from PyQt5 import QtCore
-from qt_material import apply_stylesheet
+from ui.theme import apply as apply_theme
 from ui.loading_splash import LoadingSplashScreen
 import sys
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    apply_stylesheet(app, theme="dark_teal.xml")
+    apply_theme(app)
 
     # 显示加载进度条
     splash = LoadingSplashScreen()

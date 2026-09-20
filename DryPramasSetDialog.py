@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap, QImage
 from ui.DryPramasSetDialog_ui import Ui_DryPramasSetDialog
+from ui.theme import bind as bind_theme
 import cv2 as cv
 import numpy as np
 from src.detectors.ball_detector import BallDetector
@@ -34,6 +35,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         super().__init__(parent)
         # 设置界面（从 .ui 文件生成的代码）
         self.setupUi(self)
+        bind_theme(self)
         self.is_init = False
         self.showMaximized()
 

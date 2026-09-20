@@ -1,9 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
-from PyInstaller.utils.hooks import collect_data_files
 
-# 收集qt_material的数据文件（fonts、themes、resources等）
-qt_material_datas = collect_data_files('qt_material')
 # 确保 PyInstaller 能找到项目根目录下的模块
 spec_root = os.path.dirname(os.path.abspath(SPEC))
 
@@ -35,8 +32,8 @@ a = Analysis(
     ['main.py'],
     pathex=[spec_root],
     binaries=mvs_binaries,
-    datas=qt_material_datas,
-    hiddenimports=['main_window', 'ImageViewerWidget', 'LogViewerWidget', 'DryPramasSetDialog', 'TransferPramasSetDialog','qt_material'],
+    datas=[],
+    hiddenimports=['main_window', 'ImageViewerWidget', 'LogViewerWidget', 'DryPramasSetDialog', 'TransferPramasSetDialog', 'ui.theme'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

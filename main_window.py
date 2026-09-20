@@ -3,6 +3,7 @@ from collections import deque
 from threading import Thread
 from src.support import support_funs
 import ui.main_window_ui as main_window_ui
+from ui.theme import bind as bind_theme
 from PyQt5.QtWidgets import QMainWindow
 from tools.MvImport.MvErrorDefine_const import MV_OK
 import tools.hardware as HM
@@ -168,6 +169,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         # 设置tab标题
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.log_viewer_widget), "日志查看")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.image_viewer_widget), "图像查看")
+        bind_theme(self)
         
         # 延迟加载配方，确保窗口显示后 label 已获得正确尺寸，避免图像缩放异常
         QTimer.singleShot(300, self._load_last_config)
@@ -292,7 +294,6 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         viewer.setObjectName("label_current_cam_live_dry")
         viewer.setSizePolicy(old_label.sizePolicy())
         viewer.setMaximumSize(old_label.maximumSize())
-        viewer.setStyleSheet("border: 1px solid gray; background-color: #2b2b2b;")
         layout.takeAt(index).widget().deleteLater()
         layout.insertWidget(index, viewer)
         self.label_current_cam_live_dry = viewer

@@ -1,4 +1,5 @@
-from PyQt5 import QtGui, QtCore, QtWidgets
+from PyQt5 import QtCore, QtGui, QtWidgets
+from ui.theme import PALETTE
 
 
 class WestTabBar(QtWidgets.QTabBar):
@@ -9,15 +10,26 @@ class WestTabBar(QtWidgets.QTabBar):
     TAB_HEIGHT = 80      # 每 tab 高度
 
     def paintEvent(self, event):
-        painter = QtWidgets.QStylePainter(self)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, False)
         try:
             option = QtWidgets.QStyleOptionTab()
             for index in range(self.count()):
                 self.initStyleOption(option, index)
-                painter.drawControl(QtWidgets.QStyle.CE_TabBarTabShape, option)
-                painter.drawText(self.tabRect(index),
-                                QtCore.Qt.AlignCenter | QtCore.Qt.TextDontClip,
-                                self.tabText(index))
+                rect = self.tabRect(index)
+                selected = bool(option.state & QtWidgets.QStyle.State_Selected)
+                fill = QtGui.QColor(PALETTE["tab_selected"] if selected else PALETTE["tab_bg"])
+                text = QtGui.QColor(PALETTE["bg"] if selected else PALETTE["text"])
+                painter.fillRect(rect, fill)
+                if selected:
+                    edge = QtCore.QRect(rect.right() - 3, rect.top(), 3, rect.height())
+                    painter.fillRect(edge, QtGui.QColor(PALETTE["accent_hi"]))
+                painter.setPen(text)
+                painter.drawText(
+                    rect,
+                    QtCore.Qt.AlignCenter | QtCore.Qt.TextDontClip,
+                    self.tabText(index),
+                )
         finally:
             painter.end()
 

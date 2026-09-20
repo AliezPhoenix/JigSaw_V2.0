@@ -8,6 +8,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPixmap, QImage
 from ui.TransferPramasSetDialog_ui import Ui_TransferPramasSetDialog
+from ui.theme import bind as bind_theme
 import cv2 as cv
 import numpy as np
 from src.detectors.ball_detector import BallDetector
@@ -30,6 +31,7 @@ class TransferPramasSetDialog(Ui_TransferPramasSetDialog, QDialog):
         super().__init__(parent)
         # 设置界面（从 .ui 文件生成的代码）
         self.setupUi(self)
+        bind_theme(self)
         self.is_init = False
         self.showMaximized()
 

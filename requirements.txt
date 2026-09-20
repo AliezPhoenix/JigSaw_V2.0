@@ -1,7 +1,6 @@
 # JigSaw v2.0 - Python Dependencies
 # GUI
 PyQt5>=5.15.0
-qt-material>=2.14
 
 # Image processing & Computer vision
 opencv-python>=4.5.0

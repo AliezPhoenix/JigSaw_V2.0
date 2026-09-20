@@ -9,6 +9,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QDate
 from ui.GraphicsView import ImageViewer
+from ui.theme import bind as bind_theme
 import cv2 as cv
 
 
@@ -37,9 +38,7 @@ class ImageViewerWidget(QWidget):
         # 右侧：图像预览和信息显示
         right_panel = self.create_right_panel()
         main_layout.addWidget(right_panel, 2)
-        
-        # 移除自定义样式，使用主界面的 dark_teal 主题样式
-        # 只保留必要的特殊样式（如图像预览区域的深色背景）
+        bind_theme(self)
     
     def create_left_panel(self):
         """创建左侧面板"""
@@ -150,7 +149,7 @@ class ImageViewerWidget(QWidget):
         
         # 使用ImageViewer（QGraphicsView）支持缩放和拖动
         self.image_viewer = ImageViewer()
-        self.image_viewer.setStyleSheet("background-color: #2b2b2b; border: 1px solid gray;")
+        self.image_viewer.setObjectName("image_viewer_preview")
         self.image_viewer.setMinimumSize(400, 300)
         preview_layout.addWidget(self.image_viewer)
         
