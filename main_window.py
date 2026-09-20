@@ -3,7 +3,7 @@ from collections import deque
 from threading import Thread
 from src.support import support_funs
 import ui.main_window_ui as main_window_ui
-from ui.theme import bind as bind_theme
+from ui.theme import bind as bind_theme, role_qss
 from PyQt5.QtWidgets import QMainWindow
 from tools.MvImport.MvErrorDefine_const import MV_OK
 import tools.hardware as HM
@@ -175,10 +175,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         QTimer.singleShot(300, self._load_last_config)
 
         self.label_main_running_status.setText("待机")
-        self.label_main_running_status.setStyleSheet(
-            "color: orange ; font-weight: bold; font-size: 20pt; "
-            "background-color: yellow; padding: 10px; border-radius: 5px;"
-        )
+        self.label_main_running_status.setStyleSheet(role_qss("idle"))
         _report(85, "初始化统计表格...")
         self._init_statistics_table()
         _report(95, "加载配方")
@@ -203,20 +200,6 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             item = QTableWidgetItem(label)
             item.setFlags(item.flags() & ~Qt.ItemIsEditable)
             tbl.setItem(row, 0, item)
-        # 样式
-        tbl.setStyleSheet("""
-            QTableWidget {
-                background-color: #2b2b2b;
-                color: #ffffff;
-                gridline-color: #555;
-            }
-            QHeaderView::section {
-                background-color: #00bcd4;
-                color: #000;
-                font-weight: bold;
-                padding: 5px;
-            }
-        """)
         self._update_statistics_display()
 
     _DEFAULT_DEFECT_COUNTS = {
@@ -560,7 +543,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         model_name = os.path.basename(model_path)
         self.lineEdit_fulltray_model_path.setText(model_path)
         self.label_fulltray_current_model.setText(model_name)
-        self.label_fulltray_current_model.setStyleSheet("color: green;")
+        self.label_fulltray_current_model.setStyleSheet(role_qss("model"))
 
         #——————————————————————————加载配置时显示初始 BGA mapping
         try:
@@ -800,21 +783,18 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         all_modbus_connected = all(self.connection_status["modbus"].values())
         if all_modbus_connected:
             # 所有modbus已连接，设置为绿色
-            status_lable['modbus'].setStyleSheet("color: green;")
+            status_lable['modbus'].setStyleSheet(role_qss("connected"))
         else:
-            # 有modbus未连接，设置为红色
-            status_lable['modbus'].setStyleSheet("color: red;")
+            status_lable['modbus'].setStyleSheet(role_qss("disconnected"))
         
         # 更新每个相机的label状态
         for cam_alias in self.connection_status["camera"].keys():
             if cam_alias in status_lable:
                 cam_status = self.connection_status["camera"].get(cam_alias, False)
                 if cam_status:
-                    # 相机已连接，设置为绿色
-                    status_lable[cam_alias].setStyleSheet("color: green;")
+                    status_lable[cam_alias].setStyleSheet(role_qss("connected"))
                 else:
-                    # 相机未连接，设置为红色
-                    status_lable[cam_alias].setStyleSheet("color: red;")
+                    status_lable[cam_alias].setStyleSheet(role_qss("disconnected"))
 
     def _operate_hardware(self,action,hardware_alias:str):
         if action == "connect_all":
@@ -1055,10 +1035,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         if success_count > 0:
             print(f"成功启动 {success_count} 个线程")
             self.label_main_running_status.setText("运行中")
-            self.label_main_running_status.setStyleSheet(
-                "color: white ; font-weight: bold; font-size: 20pt; "
-                "background-color: green;"
-            )
+            self.label_main_running_status.setStyleSheet(role_qss("running"))
         if failed_threads:
             print("以下线程启动失败:")
             for failed_msg in failed_threads:
@@ -1108,10 +1085,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.thread_manager.stop_all_threads()
         print("所有线程已停止")
         self.label_main_running_status.setText("待机")
-        self.label_main_running_status.setStyleSheet(
-            "color: orange ; font-weight: bold; font-size: 20pt; "
-            "background-color: yellow; padding: 10px; border-radius: 5px;"
-        )
+        self.label_main_running_status.setStyleSheet(role_qss("idle"))
         self.pushButton_start.setEnabled(True)
         self.pushButton_stop.setEnabled(False)
 
@@ -1208,17 +1182,11 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             if is_ok:
                 result_text = f"OK\n{product_count}/{total_cells}"
                 self.label_fulltray_result.setText(result_text)
-                self.label_fulltray_result.setStyleSheet(
-                    "color: white; font-weight: bold; font-size: 50pt; "
-                    "background-color: green; padding: 10px; border-radius: 5px;"
-                )
+                self.label_fulltray_result.setStyleSheet(role_qss("ok"))
             else:
                 result_text = f"NG\n{product_count}/{total_cells}"
                 self.label_fulltray_result.setText(result_text)
-                self.label_fulltray_result.setStyleSheet(
-                    "color: white; font-weight: bold; font-size: 50pt; "
-                    "background-color: red; padding: 10px; border-radius: 5px;"
-                )
+                self.label_fulltray_result.setStyleSheet(role_qss("ng"))
 
     def _update_statistics_display(self):
         """根据 statistics_data 刷新表格显示"""
@@ -1299,10 +1267,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             box.setStandardButtons(QMessageBox.Yes)
             box.setModal(False)
             box.setMinimumSize(600, 100)
-            box.setStyleSheet(
-                "QMessageBox { background-color: #FF9800; }"
-                "QMessageBox QLabel { color: red; font-size: 20px; font-weight: bold; padding: 28px; min-width: 400px; }"
-            )
+            box.setStyleSheet(role_qss("alert"))
             box.show()
         else:
             title = "提示（干燥台）" if station == "dry" else "提示（转移台）"
@@ -1313,10 +1278,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             box.setStandardButtons(QMessageBox.Yes)
             box.setModal(False)
             box.setMinimumSize(520, 200)
-            box.setStyleSheet(
-                "QMessageBox { background-color: #FF9800; }"
-                "QMessageBox QLabel { color: #212121; font-size: 20px; font-weight: bold; padding: 28px; min-width: 440px; }"
-            )
+            box.setStyleSheet(role_qss("alert"))
             box.show()
 
     def _show_original_dry(self):
@@ -1885,7 +1847,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
         self.config_manager.set_key("work_fulltray_params", "model_path", model_path)
         self.lineEdit_fulltray_model_path.setText(model_path)
         self.label_fulltray_current_model.setText(os.path.basename(model_path))
-        self.label_fulltray_current_model.setStyleSheet("color: green;")
+        self.label_fulltray_current_model.setStyleSheet(role_qss("model"))
         # 若线程已创建，更新参数以触发模型重载
         if self.thread_manager:
             ft = self.thread_manager.get_thread_obj("fulltray_thread")

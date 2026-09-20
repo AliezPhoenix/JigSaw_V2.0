@@ -5,9 +5,8 @@ from ui.theme import PALETTE
 class WestTabBar(QtWidgets.QTabBar):
     """West 位置专用 TabBar：tabSizeHint 是唯一有效控制 tab 尺寸的方式（样式表 min-width/min-height 无效）"""
 
-    # West 下：width=条厚度(水平)，height=每 tab 高度(垂直)。仅修改此处即可调整尺寸。
-    BAR_THICKNESS = 130   # 条厚度，容纳「干燥台参数」等 5 字
-    TAB_HEIGHT = 80      # 每 tab 高度
+    BAR_THICKNESS = 130
+    TAB_HEIGHT = 80
 
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
@@ -19,14 +18,20 @@ class WestTabBar(QtWidgets.QTabBar):
                 rect = self.tabRect(index)
                 selected = bool(option.state & QtWidgets.QStyle.State_Selected)
                 fill = QtGui.QColor(PALETTE["tab_selected"] if selected else PALETTE["tab_bg"])
-                text = QtGui.QColor(PALETTE["bg"] if selected else PALETTE["text"])
+                text = QtGui.QColor(PALETTE["text"] if selected else PALETTE["text_muted"])
                 painter.fillRect(rect, fill)
+                painter.setPen(QtGui.QColor(PALETTE["border"]))
+                painter.drawLine(rect.bottomLeft(), rect.bottomRight())
                 if selected:
-                    edge = QtCore.QRect(rect.right() - 3, rect.top(), 3, rect.height())
-                    painter.fillRect(edge, QtGui.QColor(PALETTE["accent_hi"]))
+                    edge = QtCore.QRect(rect.right() - 4, rect.top(), 4, rect.height())
+                    painter.fillRect(edge, QtGui.QColor(PALETTE["accent"]))
+                font = painter.font()
+                font.setBold(selected)
+                font.setLetterSpacing(QtGui.QFont.PercentageSpacing, 106)
+                painter.setFont(font)
                 painter.setPen(text)
                 painter.drawText(
-                    rect,
+                    rect.adjusted(0, 0, -6, 0),
                     QtCore.Qt.AlignCenter | QtCore.Qt.TextDontClip,
                     self.tabText(index),
                 )
@@ -34,7 +39,6 @@ class WestTabBar(QtWidgets.QTabBar):
             painter.end()
 
     def tabSizeHint(self, index):
-        # West 位置：width=条厚度(水平)，height=每 tab 高度(垂直)
         return QtCore.QSize(self.BAR_THICKNESS, self.TAB_HEIGHT)
 
 
@@ -43,6 +47,5 @@ class TabWidget(QtWidgets.QTabWidget):
         QtWidgets.QTabWidget.__init__(self, parent)
         bar = WestTabBar()
         self.setTabBar(bar)
-        # 直接设置 TabBar 最小宽度，确保条厚度生效（West 下 TabBar 的 width=条厚度）
         bar.setMinimumWidth(WestTabBar.BAR_THICKNESS)
         bar.setMinimumHeight(WestTabBar.TAB_HEIGHT)

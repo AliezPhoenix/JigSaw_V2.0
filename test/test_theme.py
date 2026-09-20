@@ -17,7 +17,18 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ui.theme import PALETTE, apply, bind, stylesheet
+from ui.theme import PALETTE, apply, bind, role_qss, stylesheet
+
+
+def test_tactical_telemetry_palette():
+    assert PALETTE["accent"].upper() == "#E61919"
+    assert PALETTE["ok"].upper() == "#4AF626"
+    compact = stylesheet().replace(" ", "").lower()
+    assert "border-radius:4px" not in compact
+    assert "border-radius:8px" in compact
+    assert PALETTE["accent"] in role_qss("idle")
+    assert PALETTE["ok"] in role_qss("running")
+
 
 
 def _app():
