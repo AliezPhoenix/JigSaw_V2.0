@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Form implementation generated from reading ui file 'ui/DryPramasSetDialog.ui'
+# Form implementation generated from reading ui file 'd:\DATA\JigSaw_v2.0\ui\DryPramasSetDialog.ui'
 #
 # Created by: PyQt5 UI code generator 5.15.11
 #
@@ -15,7 +15,7 @@ class Ui_DryPramasSetDialog(object):
     def setupUi(self, DryPramasSetDialog):
         DryPramasSetDialog.setObjectName("DryPramasSetDialog")
         DryPramasSetDialog.resize(1280, 1024)
-        DryPramasSetDialog.setMinimumSize(QtCore.QSize(1280, 1024))
+        DryPramasSetDialog.setMinimumSize(QtCore.QSize(1100, 900))
         self.main_layout = QtWidgets.QHBoxLayout(DryPramasSetDialog)
         self.main_layout.setContentsMargins(9, 9, 9, 9)
         self.main_layout.setSpacing(6)
@@ -37,7 +37,7 @@ class Ui_DryPramasSetDialog(object):
         sizePolicy.setVerticalStretch(1)
         sizePolicy.setHeightForWidth(self.processed_image_label.sizePolicy().hasHeightForWidth())
         self.processed_image_label.setSizePolicy(sizePolicy)
-        self.processed_image_label.setMinimumSize(QtCore.QSize(400, 300))
+        self.processed_image_label.setMinimumSize(QtCore.QSize(320, 180))
         self.processed_image_label.setStyleSheet("border: 1px solid gray; background-color: #2b2b2b;")
         self.processed_image_label.setAlignment(QtCore.Qt.AlignCenter)
         self.processed_image_label.setObjectName("processed_image_label")
@@ -46,7 +46,7 @@ class Ui_DryPramasSetDialog(object):
         self.label_test_result_title.setObjectName("label_test_result_title")
         self.left_layout.addWidget(self.label_test_result_title)
         self.textEdit_test_result = QtWidgets.QTextEdit(self.left_group)
-        self.textEdit_test_result.setMinimumSize(QtCore.QSize(0, 200))
+        self.textEdit_test_result.setMinimumSize(QtCore.QSize(0, 120))
         self.textEdit_test_result.setReadOnly(True)
         self.textEdit_test_result.setObjectName("textEdit_test_result")
         self.left_layout.addWidget(self.textEdit_test_result)
@@ -82,7 +82,7 @@ class Ui_DryPramasSetDialog(object):
         sizePolicy.setVerticalStretch(0)
         sizePolicy.setHeightForWidth(self.tabWidget.sizePolicy().hasHeightForWidth())
         self.tabWidget.setSizePolicy(sizePolicy)
-        self.tabWidget.setMinimumSize(QtCore.QSize(0, 200))
+        self.tabWidget.setMinimumSize(QtCore.QSize(0, 140))
         self.tabWidget.setObjectName("tabWidget")
         self.tab_size_dry = QtWidgets.QWidget()
         self.tab_size_dry.setObjectName("tab_size_dry")
@@ -526,7 +526,7 @@ class Ui_DryPramasSetDialog(object):
         sizePolicy.setVerticalStretch(1)
         sizePolicy.setHeightForWidth(self.template_image_label.sizePolicy().hasHeightForWidth())
         self.template_image_label.setSizePolicy(sizePolicy)
-        self.template_image_label.setMinimumSize(QtCore.QSize(0, 200))
+        self.template_image_label.setMinimumSize(QtCore.QSize(0, 120))
         self.template_image_label.setStyleSheet("border: 1px solid gray; background-color: #2b2b2b;")
         self.template_image_label.setAlignment(QtCore.Qt.AlignCenter)
         self.template_image_label.setObjectName("template_image_label")

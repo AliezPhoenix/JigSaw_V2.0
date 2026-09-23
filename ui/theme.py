@@ -1,35 +1,36 @@
 # -*- coding: utf-8 -*-
 """App theme: one interface, Fusion + QSS implementation.
 
-Design read: industrial AOI HMI for station operators. Equipment-panel gray,
-amber for selection/focus. Red is reserved for real NG, disconnect, and
-destructive actions so operators do not read ordinary chrome as an alarm.
+Design read: industrial AOI HMI for station operators, qt-material dark_amber
+language. Equipment-panel gray, bright amber for selection/focus. Red stays
+reserved for NG, disconnect, and destructive actions.
 Dials: VARIANCE 3, MOTION 1, DENSITY 8.
+Tokens follow qt-material dark_amber.xml (primary #FFD740, secondary #232629).
 """
-from PyQt5.QtGui import QColor, QPalette
+from PyQt5.QtGui import QColor, QFont, QPalette
 from PyQt5.QtWidgets import QPushButton, QTabWidget, QWidget
 
 PALETTE = {
-    "bg": "#1E252B",
-    "bg_alt": "#262E35",
-    "surface": "#323B44",
-    "preview": "#10161A",
-    "border": "#5A6570",
-    "border_hi": "#7E8B97",
-    "border_lo": "#14191E",
-    "accent": "#D4A017",
-    "accent_hi": "#E8B84A",
-    "text": "#EEF2F5",
-    "text_muted": "#9AA3AB",
+    "bg": "#232629",
+    "bg_alt": "#2C3136",
+    "surface": "#31363B",
+    "preview": "#1B1E21",
+    "border": "#4F5B62",
+    "border_hi": "#8A99A3",
+    "border_lo": "#15181A",
+    "accent": "#FFD740",
+    "accent_hi": "#FFFF74",
+    "text": "#FFFFFF",
+    "text_muted": "#F2F4F6",
     "ok": "#3DAA6A",
     "alarm": "#C62828",
-    "tab_bg": "#161C21",
-    "tab_selected": "#323B44",
-    "input_bg": "#10161A",
-    "button_bg": "#3A444E",
-    "button_hover": "#47535E",
-    "button_press": "#2C2618",
-    "ink": "#14191E",
+    "tab_bg": "#1B1E21",
+    "tab_selected": "#31363B",
+    "input_bg": "#1B1E21",
+    "button_bg": "#3C464D",
+    "button_hover": "#4F5B62",
+    "button_press": "#5C4A12",
+    "ink": "#000000",
 }
 
 _UI_FONT = '"Microsoft YaHei UI", "Bahnschrift", "Segoe UI", sans-serif'
@@ -66,6 +67,7 @@ QWidget {{
     background-color: {p["bg"]};
     font-family: {_UI_FONT};
     font-size: 11pt;
+    font-weight: 500;
 }}
 QMainWindow, QDialog {{
     background-color: {p["bg"]};
@@ -79,26 +81,30 @@ QGroupBox {{
     background-color: {p["bg_alt"]};
     border: 1px solid {p["border"]};
     border-radius: 0px;
-    margin-top: 16px;
-    padding-top: 12px;
+    margin-top: 12px;
+    padding-top: 10px;
     color: {p["text"]};
+    font-size: 11pt;
     font-weight: 700;
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
     left: 8px;
     padding: 0 8px;
-    color: {p["text"]};
+    color: {p["accent"]};
+    font-size: 11pt;
+    font-weight: 700;
     background-color: {p["bg"]};
 }}
 QLabel {{
     background-color: transparent;
     color: {p["text"]};
+    font-size: 11pt;
 }}
 QLabel#label_time {{
     font-family: {_DATA_FONT};
     font-weight: 700;
-    font-size: 11pt;
+    font-size: 12pt;
     padding: 4px 10px;
     background-color: {p["input_bg"]};
     {sunken}
@@ -108,9 +114,10 @@ QPushButton {{
     color: {p["text"]};
     {raised}
     border-radius: 0px;
-    padding: 6px 14px;
+    padding: 6px 12px;
     min-height: 32px;
-    font-weight: 600;
+    font-size: 11pt;
+    font-weight: 700;
 }}
 QPushButton:hover {{
     background-color: {p["button_hover"]};
@@ -125,7 +132,7 @@ QPushButton:pressed {{
 QPushButton:disabled, QPushButton#pushButton_connect:disabled,
 QPushButton[jigsawRole="primary"]:disabled, QPushButton[jigsawRole="pass"]:disabled,
 QPushButton[jigsawRole="danger"]:disabled {{
-    color: {p["text_muted"]};
+    color: {p["text"]};
     background-color: {p["tab_bg"]};
     border: 1px solid {p["border"]};
 }}
@@ -180,6 +187,8 @@ QToolButton {{
     border-radius: 0px;
     padding: 4px 8px;
     min-height: 28px;
+    font-size: 11pt;
+    font-weight: 700;
 }}
 QToolButton:hover {{
     background-color: {p["button_hover"]};
@@ -195,8 +204,9 @@ QComboBox, QDateEdit, QAbstractSpinBox {{
     color: {p["text"]};
     {sunken}
     border-radius: 0px;
-    padding: 5px 8px;
+    padding: 4px 8px;
     min-height: 28px;
+    font-size: 11pt;
     font-family: {_DATA_FONT};
     selection-background-color: {p["accent"]};
     selection-color: {p["ink"]};
@@ -247,7 +257,8 @@ QHeaderView::section {{
     background-color: {p["surface"]};
     color: {p["text"]};
     font-weight: 700;
-    padding: 8px 6px;
+    font-size: 11pt;
+    padding: 6px 6px;
     {raised}
     border-radius: 0px;
 }}
@@ -259,6 +270,7 @@ QTableWidget, QTableView, QListWidget, QTreeView {{
     border: 1px solid {p["border"]};
     border-radius: 0px;
     font-family: {_DATA_FONT};
+    font-size: 11pt;
 }}
 QTableWidget::item, QTableView::item, QListWidget::item, QTreeView::item {{
     color: {p["text"]};
@@ -328,9 +340,11 @@ QMenuBar {{
     background-color: {p["tab_bg"]};
     color: {p["text"]};
     border-bottom: 1px solid {p["border"]};
+    font-size: 11pt;
+    font-weight: 600;
 }}
 QMenuBar::item {{
-    padding: 6px 12px;
+    padding: 8px 14px;
     background-color: transparent;
 }}
 QMenuBar::item:selected {{
@@ -343,9 +357,10 @@ QMenu {{
     border: 1px solid {p["border"]};
     border-radius: 0px;
     padding: 4px;
+    font-size: 11pt;
 }}
 QMenu::item {{
-    padding: 6px 18px;
+    padding: 8px 20px;
 }}
 QMenu::item:selected {{
     background-color: {p["accent"]};
@@ -365,7 +380,8 @@ QProgressBar {{
     background-color: {p["input_bg"]};
     color: {p["text"]};
     font-family: {_DATA_FONT};
-    min-height: 22px;
+    font-size: 11pt;
+    min-height: 26px;
 }}
 QProgressBar::chunk {{
     background-color: {p["accent"]};
@@ -378,19 +394,21 @@ QTabWidget::pane {{
 }}
 QTabBar::tab {{
     background-color: {p["tab_bg"]};
-    color: {p["text_muted"]};
-    padding: 8px 14px;
+    color: {p["text"]};
+    padding: 8px 12px;
     border: 1px solid {p["border"]};
     border-radius: 0px;
+    font-size: 11pt;
+    font-weight: 600;
 }}
 QTabBar::tab:left {{
-    padding: 8px 14px;
+    padding: 8px 12px;
 }}
 QTabBar::tab:selected {{
     background-color: {p["tab_selected"]};
-    color: {p["text"]};
+    color: {p["accent"]};
     font-weight: 700;
-    border-right: 3px solid {p["accent"]};
+    border-right: 4px solid {p["accent"]};
 }}
 QTabBar::tab:hover {{
     color: {p["text"]};
@@ -400,9 +418,11 @@ QRadioButton, QCheckBox {{
     spacing: 10px;
     color: {p["text"]};
     background-color: transparent;
+    font-size: 11pt;
+    min-height: 28px;
 }}
 QRadioButton:checked, QCheckBox:checked {{
-    color: {p["text"]};
+    color: {p["accent"]};
     font-weight: 700;
 }}
 QRadioButton::indicator {{
@@ -459,13 +479,15 @@ QStatusBar {{
     background-color: {p["tab_bg"]};
     color: {p["text"]};
     border-top: 1px solid {p["border"]};
+    font-size: 11pt;
+    font-weight: 600;
 }}
 QFrame {{
     background-color: transparent;
-    color: {p["border"]};
+    color: {p["text"]};
 }}
 QFrame[frameShape="4"], QFrame[frameShape="5"] {{
-    color: {p["border"]};
+    color: {p["border_hi"]};
 }}
 *[jigsawRole="preview"] {{
     {sunken}
@@ -478,6 +500,7 @@ QLabel#info_label {{
     background-color: {p["input_bg"]};
     {sunken}
     font-family: {_DATA_FONT};
+    font-size: 11pt;
 }}
 LoadingSplashScreen {{
     background-color: {p["bg"]};
@@ -491,11 +514,13 @@ LoadingSplashScreen QLabel {{
 LoadingSplashScreen QLabel#splashTitle {{
     font-size: 16pt;
     font-weight: 700;
+    color: {p["accent"]};
 }}
 LoadingSplashScreen QLabel#splashStatus {{
-    color: {p["text_muted"]};
+    color: {p["text"]};
     font-family: {_DATA_FONT};
-    font-size: 10pt;
+    font-size: 11pt;
+    font-weight: 600;
 }}
 LoadingSplashScreen QFrame#splashRule {{
     background-color: {p["accent"]};
@@ -518,8 +543,8 @@ def role_qss(role):
             f"color: {p['ink']}; font-weight: 700; font-size: 18pt; "
             f"background-color: {p['ok']}; border: 2px solid {p['ok']}; padding: 8px;"
         ),
-        "connected": f"color: {p['ok']}; font-weight: 700; font-family: {_DATA_FONT};",
-        "disconnected": f"color: {p['alarm']}; font-weight: 700; font-family: {_DATA_FONT};",
+        "connected": f"color: {p['ok']}; font-weight: 700; font-size: 11pt; font-family: {_DATA_FONT};",
+        "disconnected": f"color: {p['alarm']}; font-weight: 700; font-size: 11pt; font-family: {_DATA_FONT};",
         "ok": (
             f"color: {p['ink']}; font-weight: 700; font-size: 50pt; "
             f"background-color: {p['ok']}; border: 2px solid {p['ok']}; padding: 8px;"
@@ -531,7 +556,7 @@ def role_qss(role):
         "model": f"color: {p['text']}; font-weight: 700;",
         "alert": (
             f"QMessageBox {{ background-color: {p['surface']}; border: 2px solid {p['accent']}; }}"
-            f"QMessageBox QLabel {{ color: {p['text']}; font-size: 20px; font-weight: 700; padding: 28px; }}"
+            f"QMessageBox QLabel {{ color: {p['text']}; font-size: 16pt; font-weight: 700; padding: 20px; }}"
         ),
     }
     return roles[role]
@@ -563,7 +588,7 @@ def _app_palette():
     for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
         for role, value in roles.items():
             pal.setColor(group, role, QColor(value))
-    muted = QColor(PALETTE["text_muted"])
+    muted = QColor(PALETTE["text"])
     pal.setColor(QPalette.Disabled, QPalette.WindowText, muted)
     pal.setColor(QPalette.Disabled, QPalette.Text, muted)
     pal.setColor(QPalette.Disabled, QPalette.ButtonText, muted)
@@ -574,6 +599,9 @@ def _app_palette():
 def apply(app):
     """Install Fusion, palette, and app QSS. Replaces qt_material."""
     app.setStyle("Fusion")
+    font = QFont("Microsoft YaHei UI", 11)
+    font.setHintingPreference(QFont.PreferFullHinting)
+    app.setFont(font)
     app.setPalette(_app_palette())
     app.setStyleSheet(stylesheet())
 

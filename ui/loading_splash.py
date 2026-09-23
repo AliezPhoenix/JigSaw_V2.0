@@ -11,7 +11,7 @@ class LoadingSplashScreen(QWidget):
         super().__init__(parent)
         self.setWindowFlags(Qt.SplashScreen | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground, False)
-        self.setFixedSize(460, 168)
+        self.setFixedSize(460, 160)
         self._setup_ui()
 
     def _setup_ui(self):
@@ -35,7 +35,7 @@ class LoadingSplashScreen(QWidget):
         self._progress_bar.setValue(0)
         self._progress_bar.setTextVisible(True)
         self._progress_bar.setFormat("%p%")
-        self._progress_bar.setMinimumHeight(24)
+        self._progress_bar.setMinimumHeight(22)
         layout.addWidget(self._progress_bar)
 
         self._status_label = QLabel("初始化中")

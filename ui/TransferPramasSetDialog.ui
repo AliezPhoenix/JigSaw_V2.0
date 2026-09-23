@@ -12,7 +12,7 @@
   </property>
   <property name="minimumSize">
    <size>
-    <width>1280</width>
+    <width>1100</width>
     <height>700</height>
    </size>
   </property>
@@ -72,8 +72,8 @@
         </property>
         <property name="minimumSize">
          <size>
-          <width>400</width>
-          <height>300</height>
+          <width>320</width>
+          <height>180</height>
          </size>
         </property>
         <property name="styleSheet">
@@ -99,7 +99,7 @@
         <property name="minimumSize">
          <size>
           <width>0</width>
-          <height>200</height>
+          <height>120</height>
          </size>
         </property>
         <property name="readOnly">
@@ -202,7 +202,7 @@
         <property name="minimumSize">
          <size>
           <width>0</width>
-          <height>200</height>
+          <height>120</height>
          </size>
         </property>
         <property name="styleSheet">
@@ -227,7 +227,7 @@
         <property name="minimumSize">
          <size>
           <width>0</width>
-          <height>200</height>
+          <height>140</height>
          </size>
         </property>
         <property name="currentIndex">

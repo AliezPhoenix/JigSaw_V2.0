@@ -19,24 +19,24 @@ class WestTabBar(QtWidgets.QTabBar):
                 rect = self.tabRect(index)
                 selected = bool(option.state & QtWidgets.QStyle.State_Selected)
                 fill = QtGui.QColor(PALETTE["tab_selected"] if selected else PALETTE["tab_bg"])
-                text = QtGui.QColor(PALETTE["text"] if selected else PALETTE["text_muted"])
+                text = QtGui.QColor(PALETTE["accent"] if selected else PALETTE["text"])
                 painter.fillRect(rect, fill)
                 painter.setPen(QtGui.QColor(PALETTE["border_lo"]))
                 painter.drawLine(rect.bottomLeft(), rect.bottomRight())
                 if selected:
                     painter.setPen(QtGui.QColor(PALETTE["border_hi"]))
                     painter.drawLine(rect.topLeft(), rect.topRight())
-                    edge = QtCore.QRect(rect.right() - 4, rect.top(), 4, rect.height())
+                    edge = QtCore.QRect(rect.right() - 5, rect.top(), 5, rect.height())
                     painter.fillRect(edge, QtGui.QColor(PALETTE["accent"]))
                 font = painter.font()
-                font.setBold(selected)
+                font.setBold(True)
                 font.setPointSize(11)
                 font.setLetterSpacing(QtGui.QFont.PercentageSpacing, 106)
                 painter.setFont(font)
                 painter.setPen(text)
                 painter.drawText(
-                    rect.adjusted(0, 0, -6, 0),
-                    QtCore.Qt.AlignCenter | QtCore.Qt.TextDontClip,
+                    rect.adjusted(4, 4, -8, -4),
+                    QtCore.Qt.AlignCenter | QtCore.Qt.TextWordWrap,
                     self.tabText(index),
                 )
         finally:

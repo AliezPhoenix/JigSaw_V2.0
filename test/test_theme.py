@@ -22,9 +22,12 @@ from ui.theme import PALETTE, apply, bind, role_qss, stylesheet
 
 
 def test_operator_safe_palette_keeps_red_for_alarms():
-    assert PALETTE["accent"].upper() == "#D4A017"
+    assert PALETTE["accent"].upper() == "#FFD740"
+    assert PALETTE["accent_hi"].upper() == "#FFFF74"
     assert PALETTE["alarm"].upper() == "#C62828"
-    assert PALETTE["bg"].upper() == "#1E252B"
+    assert PALETTE["bg"].upper() == "#232629"
+    assert PALETTE["surface"].upper() == "#31363B"
+    assert PALETTE["text"].upper() == "#FFFFFF"
     qss = stylesheet()
     chrome = qss.lower()
     default_button = chrome.split('qpushbutton[jigsawrole="danger"]')[0]
@@ -36,6 +39,10 @@ def test_operator_safe_palette_keeps_red_for_alarms():
     assert "border-radius:9px" in compact
     assert f"border-top:1pxsolid{PALETTE['border_hi'].lower()}" in compact
     assert "min-height:32px" in compact
+    assert "font-size:11pt" in compact
+    assert "font-size: 50pt" in role_qss("ok")
+    assert "font-size: 50pt" in role_qss("ng")
+    assert "font-size: 18pt" in role_qss("idle")
     assert PALETTE["accent"] in role_qss("idle")
     assert PALETTE["preview"] in role_qss("idle")
     assert PALETTE["alarm"] not in role_qss("idle")
@@ -94,6 +101,7 @@ def test_inactive_palette_keeps_light_text():
     assert inactive.lightness() > 160
     assert disabled.lightness() > 90
     assert "Microsoft YaHei UI" in stylesheet()
+    assert app.font().pointSize() == 11
 
 
 def test_apply_does_not_use_qt_material():
