@@ -1,9 +1,8 @@
 """生产 SizeDetector（Dry 混合算法）的人工测试脚本。
 
 管线已同步到 src/detectors/size_detector.py（algorithm=hybrid）：
-  灰度 -> 操作员阈值二值化 -> 按 detect_direction 取二值跳变
-  -> 共识直线 -> 灰度亮升沿 50% -> MAD 直线 -> pixel_size 换算
-质量门限固定为原 sensitivity=0 档，不再暴露灵敏度旋钮。
+  灰度 -> 外侧陡边投票 -> 局部 50% 交点 -> 固定像素修正 -> pixel_size 换算
+定位不使用二值阈值。edge_bias_x / edge_bias_y 见 QUALITY_GATES。
 Transfer 仍走 algorithm=legacy，本脚本只测 Dry 混合路径。
 
 运行：
@@ -225,11 +224,10 @@ def _direction_label(direction):
 def render_control_help(width=700, height=230):
     panel = np.full((height, width, 3), 28, dtype=np.uint8)
     lines = [
-        "Hybrid detector: binary coarse locate + grayscale rise-50% refine",
-        "direction: 0=outward 从内到外 (first body edge)  1=inward 从外往内 (outer silhouette)",
-        "min_th / max_th: operator binarisation band (picks WHICH boundary)",
-        "roi_strip: default ROI depth, min 20px; no algorithm upper cap",
-        "quality gates fixed at sensitivity=0; no pull-to-nominal compensation",
+        "Hybrid detector: outer steep-edge vote + local 50% crossing",
+        "min_th / max_th are ignored by localization",
+        "roi_strip: default ROI depth, min 20px; the edge must lie inside the strip",
+        "edge_bias_x/y shift the 50% point onto the outline (px, + = inward)",
     ]
     for idx, line in enumerate(lines):
         _put_hud_text(panel, line, (12, 24 + idx * 26), (220, 220, 220), 0.46)
@@ -427,9 +425,9 @@ def run_without_ui(detector, image_paths, args):
     success_count = 0
     elapsed_values = []
     print(
-        f"algorithm=hybrid gates=sens0 "
-        f"contrast>={QUALITY_GATES['min_contrast_ratio']} "
-        f"bin_offset<={QUALITY_GATES['max_binary_offset']}px "
+        f"algorithm=hybrid "
+        f"bias_x={QUALITY_GATES['edge_bias_x']} "
+        f"bias_y={QUALITY_GATES['edge_bias_y']} "
         f"detect_direction={detector.params.get('detect_direction', 'outward')} "
         f"({_direction_label(detector.params.get('detect_direction'))})"
     )

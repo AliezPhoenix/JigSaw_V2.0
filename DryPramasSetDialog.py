@@ -1,6 +1,7 @@
 from PyQt5.QtWidgets import (
     QApplication,
     QDialog,
+    QDoubleSpinBox,
     QPushButton,
     QFileDialog,
     QMessageBox,
@@ -14,6 +15,7 @@ import numpy as np
 from src.detectors.ball_detector import BallDetector
 from src.detectors.mark_detector import MarkDetector
 from src.detectors.size_detector import SizeDetector
+from src.detectors.size_hybrid import QUALITY_GATES
 from src.detectors.shift_detector import ShiftDetector
 from src.detectors.scratch_detector import ScratchDetector
 from src.config.config_manager import ConfigManager
@@ -28,6 +30,7 @@ from ui.mark_roi_manage_dialog import MarkRoiManageDialog
 
 SIZE_ROI_STEP = 5
 SIZE_ROI_COLOR = (255, 255, 0)  # 青色，与 mark/ball 区分
+BIAS_SLIDER_SCALE = 20  # 滑条 1 格 = 0.05 px
 
 
 class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
@@ -53,8 +56,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         # 设置 SpinBox 范围
         self.spin_thresh_lower_ball.setMinimum(0)
         self.spin_thresh_upper_ball.setMinimum(0)
-        self.spin_thresh_lower_size.setMinimum(0)
-        self.spin_thresh_upper_size.setMinimum(0)
+        self._install_size_bias_editors()
         self.spin_area_min.setMinimum(0)
         self.spin_area_max.setMinimum(0)
         # Mark检测的 SpinBox
@@ -69,10 +71,10 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         self.horizontalSlider.setMaximum(255)
         self.horizontalSlider_2.setMinimum(0)
         self.horizontalSlider_2.setMaximum(255)
-        self.horizontalSlider_3.setMinimum(0)
-        self.horizontalSlider_3.setMaximum(255)
-        self.horizontalSlider_4.setMinimum(0)
-        self.horizontalSlider_4.setMaximum(255)
+        self.horizontalSlider_3.setMinimum(-100)
+        self.horizontalSlider_3.setMaximum(100)
+        self.horizontalSlider_4.setMinimum(-100)
+        self.horizontalSlider_4.setMaximum(100)
         # Mark检测的 Slider
         self.horizontalSlider_threshold_min_mark_dry.setMinimum(0)
         self.horizontalSlider_threshold_min_mark_dry.setMaximum(255)
@@ -85,11 +87,19 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         self.horizontalSlider_thresh_upper_scratch.setMaximum(255)
         
         # 绑定 Slider 和 SpinBox 的双向同步
-        # 尺寸检测的 threshold
-        self.horizontalSlider_3.valueChanged.connect(self.spin_thresh_lower_size.setValue)
-        self.spin_thresh_lower_size.valueChanged.connect(self.horizontalSlider_3.setValue)
-        self.horizontalSlider_4.valueChanged.connect(self.spin_thresh_upper_size.setValue)
-        self.spin_thresh_upper_size.valueChanged.connect(self.horizontalSlider_4.setValue)
+        # 尺寸边缘修正：滑条整数与带符号小数互相同步
+        self.horizontalSlider_3.valueChanged.connect(
+            lambda value: self._sync_bias_from_slider(value, self.spin_thresh_lower_size)
+        )
+        self.spin_thresh_lower_size.valueChanged.connect(
+            lambda value: self._sync_bias_from_spin(value, self.horizontalSlider_3)
+        )
+        self.horizontalSlider_4.valueChanged.connect(
+            lambda value: self._sync_bias_from_slider(value, self.spin_thresh_upper_size)
+        )
+        self.spin_thresh_upper_size.valueChanged.connect(
+            lambda value: self._sync_bias_from_spin(value, self.horizontalSlider_4)
+        )
         
         # 锡球检测的 threshold
         self.horizontalSlider.valueChanged.connect(self.spin_thresh_lower_ball.setValue)
@@ -152,6 +162,8 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         # 尺寸检测的 slider 触发 size 检测
         self.horizontalSlider_3.valueChanged.connect(lambda: self.auto_run_test("size"))
         self.horizontalSlider_4.valueChanged.connect(lambda: self.auto_run_test("size"))
+        self.spin_thresh_lower_size.valueChanged.connect(lambda: self.auto_run_test("size"))
+        self.spin_thresh_upper_size.valueChanged.connect(lambda: self.auto_run_test("size"))
         # Mark检测的 slider 触发 mark 检测
         self.horizontalSlider_threshold_min_mark_dry.valueChanged.connect(lambda: self.auto_run_test("mark"))
         self.horizontalSlider_threshold_max_mark_dry.valueChanged.connect(lambda: self.auto_run_test("mark"))
@@ -162,6 +174,111 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
         self._refresh_size_roi_xywh_label()
         self.is_init = True
     
+    def _install_size_bias_editors(self):
+        """用左右/上下边缘修正替换尺寸页原来的二值阈值框。"""
+        self.label_thresh_lower_size.setText("左右修正(px):")
+        self.label_thresh_upper_size.setText("上下修正(px):")
+        self.label_thresh_lower_size.setToolTip("正值把左右边向产品内侧移动，宽度变小。")
+        self.label_thresh_upper_size.setToolTip("正值把上下边向产品内侧移动，高度变小。")
+        self.spin_thresh_lower_size = self._swap_bias_spin(
+            self.spin_thresh_lower_size, QUALITY_GATES["edge_bias_x"]
+        )
+        self.spin_thresh_upper_size = self._swap_bias_spin(
+            self.spin_thresh_upper_size, QUALITY_GATES["edge_bias_y"]
+        )
+
+    def _swap_bias_spin(self, old_spin, default):
+        layout = self.gridLayout
+        index = layout.indexOf(old_spin)
+        row, col, rowspan, colspan = layout.getItemPosition(index)
+        layout.removeWidget(old_spin)
+        old_spin.hide()
+        old_spin.setParent(None)
+        spin = QDoubleSpinBox(self.params_group)
+        spin.setObjectName(old_spin.objectName())
+        spin.setRange(-5.0, 5.0)
+        spin.setDecimals(2)
+        spin.setSingleStep(0.05)
+        spin.setValue(float(default))
+        layout.addWidget(spin, row, col, rowspan, colspan)
+        return spin
+
+    def _sync_bias_from_slider(self, slider_value, spin):
+        bias = slider_value / BIAS_SLIDER_SCALE
+        if abs(spin.value() - bias) > 1e-6:
+            spin.blockSignals(True)
+            spin.setValue(bias)
+            spin.blockSignals(False)
+
+    def _sync_bias_from_spin(self, bias, slider):
+        slider_value = int(round(float(bias) * BIAS_SLIDER_SCALE))
+        slider_value = max(slider.minimum(), min(slider.maximum(), slider_value))
+        if slider.value() != slider_value:
+            slider.blockSignals(True)
+            slider.setValue(slider_value)
+            slider.blockSignals(False)
+        snapped = slider_value / BIAS_SLIDER_SCALE
+        if abs(float(bias) - snapped) <= 1e-6:
+            return
+        spin = (
+            self.spin_thresh_lower_size
+            if slider is self.horizontalSlider_3
+            else self.spin_thresh_upper_size
+        )
+        spin.blockSignals(True)
+        spin.setValue(snapped)
+        spin.blockSignals(False)
+
+    def _set_bias_widgets(self, spin, slider, bias):
+        bias = max(-5.0, min(5.0, float(bias)))
+        slider_value = int(round(bias * BIAS_SLIDER_SCALE))
+        spin.blockSignals(True)
+        slider.blockSignals(True)
+        spin.setValue(slider_value / BIAS_SLIDER_SCALE)
+        slider.setValue(slider_value)
+        spin.blockSignals(False)
+        slider.blockSignals(False)
+
+    def _draw_size_edge_overlay(self, image):
+        """尺寸页上方预览：搜索带和被采纳的边缘点。"""
+        canvas = ensure_bgr_u8(image, copy=True)
+        debug = getattr(self.size_detector, "last_debug", None) or {}
+        rois = self.local_params.get("size_rois") or {}
+        for side in SizeDetector.ROI_SIDES:
+            info = debug.get(side) or {}
+            roi = info.get("roi") or SizeDetector._normalize_roi(rois.get(side))
+            if roi:
+                x, y, w, h = (int(v) for v in roi)
+                cv.rectangle(canvas, (x, y), (x + w - 1, y + h - 1), SIZE_ROI_COLOR, 2)
+            points = np.asarray(info.get("points", []), dtype=np.float64).reshape(-1, 2)
+            for point in points:
+                cv.circle(
+                    canvas, (int(round(point[0])), int(round(point[1]))),
+                    3, (0, 200, 0), -1, cv.LINE_AA,
+                )
+            if roi:
+                count = info.get("inlier_count")
+                label = side if count is None else f"{side} {int(count)}"
+                self._draw_size_side_label(canvas, label, roi, side)
+        return canvas
+
+    def _draw_size_side_label(self, canvas, text, roi, side):
+        """把该边有效点数写在搜索带靠外侧的一角。"""
+        x, y, w, h = (int(v) for v in roi)
+        img_h, img_w = canvas.shape[:2]
+        if side == "bottom":
+            org = (x + 4, y + h - 8)
+        elif side == "right":
+            org = (x + max(4, w - 120), y + 18)
+        else:
+            org = (x + 4, y + 18)
+        org = (
+            max(0, min(int(org[0]), img_w - 8)),
+            max(14, min(int(org[1]), img_h - 4)),
+        )
+        cv.putText(canvas, text, org, cv.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv.LINE_AA)
+        cv.putText(canvas, text, org, cv.FONT_HERSHEY_SIMPLEX, 0.6, SIZE_ROI_COLOR, 1, cv.LINE_AA)
+
     def auto_run_test(self,detect_type=None):
         """当 Slider 数值变化时自动触发测试（仅在初始化完成后）"""
         if self.is_init and self.template_image is not None:
@@ -652,9 +769,7 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             if detect_type == "all":
                 image_binary = cv.inRange(template_gray,self.local_params["min_threshold_mark"],self.local_params["max_threshold_mark"])
             elif detect_type == "size":
-                #image_gray = cv.equalizeHist(template_gray)
-                image_binary = cv.inRange(template_gray, self.local_params["min_threshold_size"], self.local_params["max_threshold_size"])
-                #image_binary = cv.bitwise_not(image_binary)
+                image_binary = self._draw_size_edge_overlay(self.template_image)
             elif detect_type == "ball":
                 image_binary = cv.inRange(template_gray,self.local_params["min_threshold_ball"],self.local_params["max_threshold_ball"])
             elif detect_type == "mark":
@@ -663,9 +778,6 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 image_binary = cv.inRange(template_gray,self.local_params["min_threshold_scratch"],self.local_params["max_threshold_scratch"])
 
             image_binary = ensure_bgr_u8(image_binary, copy=True)
-            if detect_type == "size":
-                image_binary = self._draw_size_rois_on_image(image_binary)
-                image_result = self._draw_size_rois_on_image(image_result)
             self.processed_image = np.vstack((image_binary, image_result))
             self.display_processed_image(self.processed_image)
             
@@ -820,13 +932,11 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             #————————————————————size参数————————————————————————
             product_size_tolerance_x = self.local_params["product_size_tolerance_x"]
             product_size_tolerance_y = self.local_params["product_size_tolerance_y"]
-            min_threshold_size = self.local_params["min_threshold_size"]
-            max_threshold_size = self.local_params["max_threshold_size"]
+            edge_bias_x = float(self.local_params.get("edge_bias_x", QUALITY_GATES["edge_bias_x"]))
+            edge_bias_y = float(self.local_params.get("edge_bias_y", QUALITY_GATES["edge_bias_y"]))
 
             self.size_detector.update_params(
                 {
-                    "min_threshold": min_threshold_size,
-                    "max_threshold": max_threshold_size,
                     "allow_tolerance_x": product_size_tolerance_x,
                     "allow_tolerance_y": product_size_tolerance_y,
                     "rois": self.local_params.get("size_rois"),
@@ -836,6 +946,8 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                     "detect_direction": self.local_params.get(
                         "size_detect_direction", "outward"
                     ),
+                    "edge_bias_x": edge_bias_x,
+                    "edge_bias_y": edge_bias_y,
                     "algorithm": "hybrid",
                 })
             
@@ -906,10 +1018,8 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
                 self.lineEdit_ball_radius_std.setText(str(std_radius))
                 self.line_X_tolerance_allow.setText(str(product_size_tolerance_x))
                 self.line_Y_tolerance_allow.setText(str(product_size_tolerance_y))
-                self.spin_thresh_lower_size.setValue(int(min_threshold_size))
-                self.spin_thresh_upper_size.setValue(int(max_threshold_size))
-                self.horizontalSlider_3.setValue(int(min_threshold_size))
-                self.horizontalSlider_4.setValue(int(max_threshold_size))
+                self._set_bias_widgets(self.spin_thresh_lower_size, self.horizontalSlider_3, edge_bias_x)
+                self._set_bias_widgets(self.spin_thresh_upper_size, self.horizontalSlider_4, edge_bias_y)
                 direction = self.local_params.get("size_detect_direction", "outward")
                 self.radioButton_inward_detect.setChecked(direction == "inward")
                 self.radioButton_outward_detect.setChecked(direction == "outward")
@@ -977,11 +1087,11 @@ class DryPramasSetDialog(Ui_DryPramasSetDialog, QDialog):
             if hasattr(self, 'lineEdit_ball_radius_std') and self.lineEdit_ball_radius_std.text().strip():
                 self.local_params["std_radius"] = float(self.lineEdit_ball_radius_std.text())
             
-            # 尺寸检测参数
+            # 尺寸边缘修正。正值向产品内侧移动。
             if hasattr(self, 'spin_thresh_lower_size'):
-                self.local_params["min_threshold_size"] = int(self.spin_thresh_lower_size.value())
+                self.local_params["edge_bias_x"] = float(self.spin_thresh_lower_size.value())
             if hasattr(self, 'spin_thresh_upper_size'):
-                self.local_params["max_threshold_size"] = int(self.spin_thresh_upper_size.value())
+                self.local_params["edge_bias_y"] = float(self.spin_thresh_upper_size.value())
             
             # 尺寸容差参数
             if hasattr(self, 'line_X_tolerance_allow') and hasattr(self, 'line_Y_tolerance_allow'):

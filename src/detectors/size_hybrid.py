@@ -1,6 +1,12 @@
-"""Dry 站尺寸检测：二值粗定位 + 灰度亮升沿 50% 精修。
+"""Dry 站尺寸检测：外侧最齐陡边 + 局部 50% 交点。
 
-质量门限固定为原 sensitivity=0 的宽松档，不再暴露灵敏度旋钮。
+不依赖操作员二值阈值。每条边在 ROI 外侧找「向产品内部变暗或变亮」的陡沿，
+用沿边投票选出最齐的一道（与最高票接近时取更外侧，躲开阴影和内框），
+再在该处取局部明暗的 50% 作为亚像素位置。
+
+edge_bias_x / edge_bias_y 是这条产品边上 50% 点相对外形轮廓的固定像素修正：
+左右边 50% 落在饱和亮背景的外侧，上下边 50% 落在过渡带内侧。
+正值表示向 ROI 内侧移动。
 """
 from __future__ import annotations
 
@@ -10,337 +16,307 @@ import numpy as np
 from src.support.data_structure import Size_Result
 from src.support.support_funs import ensure_gray_u8
 
-BINARY_SMOOTH = 5
-BINARY_HOLE_CLOSE = 7
-BINARY_ISLAND_OPEN = 7
-INNER_SPAN = 10
-OUTER_SPAN = 20
 MIN_ROI_DEPTH = 20
-GUIDE_BAND = 6.0
-ANCHOR_BRACKET = 6
-SMOOTH_SIGMA = 1.0
-LEVEL_SIGMA = 1.6
-LATERAL_HALF_WIDTH = 3
-POLARITY_BAND = 8
-MIN_VALID_PROFILES = 12
+MIN_EDGE_VOTES = 8
 
-# 原 sensitivity=0 档，写死后不再插值。
 QUALITY_GATES = {
-    "min_contrast_ratio": 0.12,
-    "max_edge_width": 12.0,
-    "max_binary_offset": 12.0,
-    "min_profile_success_ratio": 0.20,
-    "min_line_inlier_ratio": 0.20,
-    "max_line_rmse": 1.00,
-    "min_line_inlier_span_ratio": 0.50,
+    "min_transition_drop": 18.0,
+    "peak_gradient_fraction": 0.28,
+    "peak_gradient_floor": 4.0,
+    "consensus_keep_ratio": 0.80,
+    "guide_window": 4.0,
+    "crossing_fraction": 0.50,
+    "edge_bias_x": 0.60,
+    "edge_bias_y": -1.40,
     "robust_sigma": 3.5,
-    "max_outlier_distance": 2.5,
+    "max_outlier_distance": 2.0,
 }
 
 
-def profile_windows(depth):
-    """按剖面深度给出粗定位边距与精修窗。深度不足 MIN_ROI_DEPTH 时返回 None。"""
-    depth = int(depth)
-    if depth < MIN_ROI_DEPTH:
-        return None
-    inner = min(INNER_SPAN, max(2, depth // 4))
-    outer = min(OUTER_SPAN, max(3, depth - inner - 1))
-    if inner + outer + 1 > depth:
-        inner = max(2, depth - 4)
-        outer = depth - inner - 1
-    preferred_margin = max(INNER_SPAN, OUTER_SPAN) + 2
-    min_band = 16
-    max_margin = max(0, (depth - min_band) // 2)
-    margin = min(preferred_margin, max_margin)
-    return margin, inner, outer
-
-
-def oriented_profiles(plane, roi, roi_name, smooth_sigma):
-    """取出单边 ROI 剖面 (扫描线数, 深度)，索引 0 为产品内侧。"""
-    from src.detectors.size_detector import SizeDetector
-
-    roi_x, roi_y, roi_w, roi_h = roi
-    sub = np.ascontiguousarray(
-        plane[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w], dtype=np.float32
-    )
-    is_horizontal = roi_name in ("top", "bottom")
-    if LATERAL_HALF_WIDTH > 0:
-        kernel = 2 * LATERAL_HALF_WIDTH + 1
-        sub = cv.blur(sub, (kernel, 1) if is_horizontal else (1, kernel))
-    profiles = np.ascontiguousarray(sub.T) if is_horizontal else sub
-    if SizeDetector._is_reverse_for_side(roi_name, "outward"):
-        profiles = np.ascontiguousarray(profiles[:, ::-1])
-    if smooth_sigma > 0:
-        profiles = cv.GaussianBlur(
-            profiles, (0, 0), sigmaX=float(smooth_sigma), sigmaY=0,
-            borderType=cv.BORDER_REFLECT_101,
-        )
-    return profiles, is_horizontal
-
-
-def binary_exterior_is_high(binary_profiles, band=POLARITY_BAND):
-    """ROI 几何最外侧一带的二值中位数是否为 255（背景侧）。"""
-    width = max(2, min(int(band), binary_profiles.shape[1] // 3))
-    return bool(np.median(binary_profiles[:, -width:]) > 127.0)
-
-
-def _first_run_end(mask):
-    width = mask.shape[1]
-    first = np.argmax(mask, axis=1)
-    columns = np.arange(width, dtype=np.int64)[None, :]
-    background = (~mask) & (columns >= first[:, None])
-    first_background = np.where(
-        background.any(axis=1), np.argmax(background, axis=1), width,
-    )
-    return first_background - 1
-
-
-def binary_silhouette(binary_profiles, exterior_high, margin, direction="outward"):
-    """按检测方向取产品轮廓：outward 第一道，inward 最外道。"""
-    from src.detectors.size_detector import SizeDetector
-
-    work = binary_profiles / 255.0
-    if not exterior_high:
-        work = 1.0 - work
-    work = cv.blur(work, (BINARY_SMOOTH, 1))
-    depth = work.shape[1]
-    margin = max(0, min(int(margin), max(0, (depth - 3) // 2)))
-    if depth - 2 * margin < 3:
-        return None, None
-
-    product = np.ascontiguousarray(((work < 0.5).astype(np.uint8)) * 255)
-    depth_k = product.shape[1]
-    close_k = min(BINARY_HOLE_CLOSE, depth_k if depth_k % 2 else depth_k - 1)
-    open_k = min(BINARY_ISLAND_OPEN, depth_k if depth_k % 2 else depth_k - 1)
-    if close_k >= 3:
-        product = cv.morphologyEx(
-            product, cv.MORPH_CLOSE,
-            cv.getStructuringElement(cv.MORPH_RECT, (close_k, 1)),
-        )
-    if open_k >= 3:
-        product = cv.morphologyEx(
-            product, cv.MORPH_OPEN,
-            cv.getStructuringElement(cv.MORPH_RECT, (open_k, 1)),
-        )
-    mask = product[:, margin:depth - margin] > 127
-    has_edge = mask.any(axis=1)
-    if SizeDetector.normalize_detect_direction(direction) == "inward":
-        width = mask.shape[1]
-        index = (width - 1) - np.argmax(mask[:, ::-1], axis=1)
-    else:
-        index = _first_run_end(mask)
-    position = np.where(has_edge, index.astype(np.float64) + margin, np.nan)
-    return position, has_edge
-
-
-def consensus_line(position, trusted):
-    if np.count_nonzero(trusted) < MIN_VALID_PROFILES:
-        return None
-    candidate = np.where(trusted, position, np.nan)
-    median = float(np.nanmedian(candidate))
-    mad = float(np.nanmedian(np.abs(candidate - median)))
-    tolerance = max(3.0, 3.0 * 1.4826 * mad)
-    rows = np.arange(len(position), dtype=np.float64)
-    keep = trusted & (np.abs(position - median) <= tolerance)
-    if np.count_nonzero(keep) < MIN_VALID_PROFILES:
-        return np.full(len(position), median)
-    guide = np.polyval(np.polyfit(rows[keep], position[keep], 1), rows)
-    keep = trusted & (np.abs(position - guide) <= tolerance)
-    if np.count_nonzero(keep) >= MIN_VALID_PROFILES:
-        guide = np.polyval(np.polyfit(rows[keep], position[keep], 1), rows)
-    return guide
-
-
-def _plateau_offset(aggregate, inner, outer):
-    dark = float(aggregate[:inner + 1].min())
-    bright = float(np.median(aggregate[-max(3, outer // 3):]))
-    span = bright - dark
-    if not np.isfinite(span) or span <= 1e-9:
-        return None
-    tail = aggregate[inner:] >= dark + 0.98 * span
-    reached = int(np.argmax(tail)) if tail.any() else outer
-    hi = max(2, outer - 2)
-    lo = min(2, hi)
-    return int(np.clip(reached + 2, lo, hi))
-
-
-def gradient_anchor(gray_profiles, guide, exterior_high, bracket=ANCHOR_BRACKET):
-    signed = gray_profiles if exterior_high else -gray_profiles
-    derivative = np.diff(signed, axis=1)
-    depth = derivative.shape[1]
-    width = 2 * int(bracket) + 1
-    low = np.clip(
-        np.rint(guide).astype(np.int64) - int(bracket), 0, max(0, depth - width)
-    )
-    columns = np.clip(low[:, None] + np.arange(width)[None, :], 0, depth - 1)
-    return low + np.argmax(
-        np.take_along_axis(derivative, columns, axis=1), axis=1
-    )
-
-
-def refine_rise50(gray_profiles, anchor, global_dynamic, inner_span=None, outer_span=None):
-    depth = gray_profiles.shape[1]
-    inner = INNER_SPAN if inner_span is None else int(inner_span)
-    outer = OUTER_SPAN if outer_span is None else int(outer_span)
-    lo = inner
-    hi = max(inner, depth - outer - 1)
-    base = np.clip(np.rint(anchor).astype(np.int64), lo, hi)
-    offsets = np.arange(-inner, outer + 1)
-    columns = np.clip(base[:, None] + offsets[None, :], 0, depth - 1)
-    window = np.ascontiguousarray(
-        np.take_along_axis(gray_profiles, columns, axis=1), dtype=np.float32
-    )
-    outer_level = float(np.median(window[:, -max(3, outer // 4):]))
-    inner_level = float(np.median(window[:, :inner + 1]))
-    if outer_level < inner_level:
-        window = -window
-    smoothed = cv.GaussianBlur(
-        window, (0, 0), sigmaX=LEVEL_SIGMA, sigmaY=0,
-        borderType=cv.BORDER_REFLECT_101,
-    )
-    plateau = _plateau_offset(
-        np.median(smoothed, axis=0).astype(np.float64), inner, outer
-    )
-    if plateau is None:
-        return None, "边缘对比度不足"
-    window = window.astype(np.float64)
-    smoothed = smoothed.astype(np.float64)
-    bright = np.median(smoothed[:, inner + plateau:], axis=1)
-    inner_band = smoothed[:, :inner + 1]
-    trough_idx = np.argmin(inner_band, axis=1)
-    center = np.clip(trough_idx, 1, max(1, inner - 1))
-    left = np.take_along_axis(inner_band, (center - 1)[:, None], 1)[:, 0]
-    middle = np.take_along_axis(inner_band, center[:, None], 1)[:, 0]
-    right = np.take_along_axis(inner_band, (center + 1)[:, None], 1)[:, 0]
-    curvature = left - 2.0 * middle + right
-    shift = np.clip(
-        np.divide(
-            0.5 * (left - right), curvature,
-            out=np.zeros_like(curvature), where=np.abs(curvature) > 1e-12,
-        ),
-        -1.0, 1.0,
-    )
-    dark = middle - 0.25 * (left - right) * shift
-    contrast = bright - dark
-    usable = np.isfinite(contrast) & (contrast > 1e-9)
-    columns = np.arange(window.shape[1])[None, :]
-    search_from = trough_idx[:, None]
-
-    def crossing(level):
-        reached = (window >= level[:, None]) & (columns >= search_from)
-        any_reached = reached.any(axis=1)
-        index = np.clip(np.argmax(reached, axis=1), 1, window.shape[1] - 1)
-        upper = np.take_along_axis(window, index[:, None], 1)[:, 0]
-        lower = np.take_along_axis(window, (index - 1)[:, None], 1)[:, 0]
-        delta = upper - lower
-        fraction = np.divide(
-            level - lower, delta,
-            out=np.zeros_like(delta), where=np.abs(delta) > 1e-12,
-        )
-        return np.where(
-            any_reached, index - 1 + np.clip(fraction, 0.0, 1.0), np.nan
-        )
-
-    cross50 = crossing(dark + 0.50 * contrast)
-    cross10 = crossing(dark + 0.10 * contrast)
-    cross90 = crossing(dark + 0.90 * contrast)
-    return {
-        "position": base - inner + cross50,
-        "contrast_ratio": contrast / max(float(global_dynamic), 1e-9),
-        "edge_width": cross90 - cross10,
-        "usable": usable,
-        "window": window,
-        "smoothed": smoothed,
-        "dark": dark,
-        "bright": bright,
-        "plateau": plateau,
-    }, None
-
-
-def robust_fit_edge_line(points, is_horizontal, gates):
-    points = np.asarray(points, dtype=np.float64)
-    if len(points) < 2:
-        return None
-    independent = points[:, 0] if is_horizontal else points[:, 1]
-    dependent = points[:, 1] if is_horizontal else points[:, 0]
-    mask = np.ones(len(points), dtype=bool)
-    robust_sigma = float(gates.get("robust_sigma", 3.5))
-    max_outlier_distance = float(gates.get("max_outlier_distance", 2.5))
-    coeff = None
-    for _ in range(6):
-        if np.count_nonzero(mask) < 2:
-            return None
-        coeff = np.polyfit(independent[mask], dependent[mask], 1)
-        residual = dependent - np.polyval(coeff, independent)
-        center = float(np.median(residual[mask]))
-        mad = float(np.median(np.abs(residual[mask] - center)))
-        cutoff = min(
-            max_outlier_distance,
-            max(0.10, robust_sigma * max(1.4826 * mad, 0.03)),
-        )
-        new_mask = np.abs(residual - center) <= cutoff
-        if np.array_equal(mask, new_mask) or np.count_nonzero(new_mask) < 2:
-            break
-        mask = new_mask
-    if coeff is None or np.count_nonzero(mask) < 2:
-        return None
-    coeff = np.polyfit(independent[mask], dependent[mask], 1)
-    residual = dependent - np.polyval(coeff, independent)
-    independent_span = max(float(np.ptp(independent)), 1e-9)
-    return {
-        "slope": float(coeff[0]),
-        "intercept": float(coeff[1]),
-        "inlier_mask": mask,
-        "line_rmse": float(np.sqrt(np.mean(residual[mask] ** 2))),
-        "inlier_count": int(np.count_nonzero(mask)),
-        "inlier_ratio": float(np.count_nonzero(mask) / len(mask)),
-        "inlier_span_ratio": float(np.ptp(independent[mask]) / independent_span),
-        "coverage": (float(independent[mask].min()), float(independent[mask].max())),
-    }
+def resolve_gates(params):
+    """合并固定门限与调用方传入的左右/上下修正。"""
+    gates = dict(QUALITY_GATES)
+    if not params:
+        return gates
+    for key in ("edge_bias_x", "edge_bias_y"):
+        value = params.get(key)
+        if value is None:
+            continue
+        gates[key] = float(value)
+    return gates
 
 
 def evaluate_edge_line(line, coordinate):
     return float(np.polyval([line["slope"], line["intercept"]], coordinate))
 
 
-def side_debug(roi, is_horizontal, exterior_high, fine, offset,
-               attempted, valid_count, line, points):
-    usable = (
-        fine["usable"]
-        & np.isfinite(fine["position"])
-        & np.isfinite(fine["edge_width"])
+def _outside_first_profiles(plane, roi, roi_name):
+    """单边剖面 (扫描线, 深度)，深度 0 在 ROI 外侧。"""
+    roi_x, roi_y, roi_w, roi_h = roi
+    sub = np.ascontiguousarray(plane[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w], dtype=np.float32)
+    is_horizontal = roi_name in ("top", "bottom")
+    if roi_name == "bottom":
+        sub = sub[::-1, :]
+    elif roi_name == "right":
+        sub = sub[:, ::-1]
+    profiles = np.ascontiguousarray(sub.T if is_horizontal else sub)
+    lateral = cv.GaussianBlur(profiles, (1, 5), 0, borderType=cv.BORDER_REPLICATE)
+    blurred = cv.GaussianBlur(
+        lateral, (0, 0), sigmaX=0.8, sigmaY=0, borderType=cv.BORDER_REPLICATE,
     )
-    entry = {
+    return blurred, is_horizontal
+
+
+def _expected_inward_sign(profiles):
+    """外侧比内侧亮则向内变暗（-1），否则向内变亮（+1）。"""
+    depth = profiles.shape[1]
+    band = max(6, min(12, depth // 5))
+    outer = float(np.percentile(profiles[:, :band], 75))
+    inner = float(np.percentile(profiles[:, -band:], 35))
+    return -1.0 if outer >= inner else 1.0
+
+
+def _collect_peaks(profiles, sign, gates):
+    strength = sign * np.diff(profiles, axis=1)
+    n_lines, n_steps = strength.shape
+    if n_steps < 6:
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
+    limit = np.maximum(
+        float(gates["peak_gradient_floor"]),
+        float(gates["peak_gradient_fraction"]) * np.percentile(strength, 98, axis=1),
+    )
+    min_drop = float(gates["min_transition_drop"])
+    cooldown = np.zeros(n_lines, dtype=np.int32)
+    row_ids = []
+    positions = []
+    depth = profiles.shape[1]
+    for index in range(2, n_steps - 2):
+        ready = cooldown <= index
+        is_peak = (
+            ready
+            & (strength[:, index] >= limit)
+            & (strength[:, index] >= strength[:, index - 1])
+            & (strength[:, index] >= strength[:, index + 1])
+        )
+        left = profiles[:, max(0, index - 3)]
+        right = profiles[:, min(depth - 1, index + 4)]
+        is_peak &= sign * (right - left) >= min_drop
+        hit = np.flatnonzero(is_peak)
+        if hit.size == 0:
+            continue
+        left_g = strength[hit, index - 1]
+        mid = strength[hit, index]
+        right_g = strength[hit, index + 1]
+        denom = left_g - 2.0 * mid + right_g
+        shift = np.divide(
+            0.5 * (left_g - right_g), denom,
+            out=np.zeros(hit.size, dtype=np.float64),
+            where=np.abs(denom) > 1e-9,
+        )
+        row_ids.append(hit)
+        positions.append(index + np.clip(shift, -0.6, 0.6))
+        cooldown[hit] = index + 5
+    if not row_ids:
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.float64)
+    return np.concatenate(row_ids), np.concatenate(positions)
+
+
+def _consensus_depth(rows, positions, n_steps, n_lines, gates):
+    if positions.size == 0:
+        return None
+    acc = np.bincount(
+        np.clip(np.rint(positions).astype(np.int64), 0, n_steps - 1),
+        minlength=n_steps,
+    ).astype(np.float64)
+    smooth = np.convolve(
+        acc, np.array([1.0, 2.0, 3.0, 2.0, 1.0]) / 9.0, mode="same",
+    )
+    peak = float(smooth.max())
+    if peak < max(MIN_EDGE_VOTES, 0.08 * n_lines):
+        return None
+    qualified = np.flatnonzero(smooth >= float(gates["consensus_keep_ratio"]) * peak)
+    best = int(qualified[0])
+    window = smooth[max(0, best - 2): best + 3]
+    return float(np.average(
+        np.arange(max(0, best - 2), max(0, best - 2) + window.size),
+        weights=np.maximum(window, 1e-6),
+    ))
+
+
+def _crossings(profiles, anchors, fraction):
+    """锚点附近，局部外侧电平与内侧电平之间 fraction 处的亚像素深度。"""
+    n_lines, depth = profiles.shape
+    anchor = np.clip(np.rint(anchors).astype(np.int64), 8, max(8, depth - 12))
+    outer_cols = anchor[:, None] + np.arange(-8, -1)
+    inner_cols = np.clip(anchor[:, None] + np.arange(2, 12), 0, depth - 1)
+    outer = np.median(np.take_along_axis(profiles, outer_cols, axis=1), axis=1)
+    inner = np.median(np.take_along_axis(profiles, inner_cols, axis=1), axis=1)
+    level = (1.0 - fraction) * inner + fraction * outer
+    offsets = np.arange(-8, 9)
+    columns = np.clip(anchor[:, None] + offsets[None, :], 0, depth - 1)
+    window = np.take_along_axis(profiles, columns, axis=1)
+    delta = window - level[:, None]
+    crossed = delta[:, :-1] * delta[:, 1:] <= 0.0
+    has = crossed.any(axis=1)
+    index = np.argmax(crossed, axis=1)
+    v0 = np.take_along_axis(window, index[:, None], axis=1)[:, 0]
+    v1 = np.take_along_axis(
+        window, np.clip(index + 1, 0, window.shape[1] - 1)[:, None], axis=1,
+    )[:, 0]
+    step = np.divide(level - v0, v1 - v0, out=np.zeros(n_lines), where=np.abs(v1 - v0) > 1e-9)
+    depth_pos = anchor + (index - 8) + np.clip(step, 0.0, 1.0)
+    return np.where(has, depth_pos, anchors), outer, inner, window
+
+
+def _fit_depth_line(position, gates):
+    index = np.flatnonzero(np.isfinite(position))
+    if index.size < MIN_EDGE_VOTES:
+        return None
+    values = position[index]
+    median = float(np.median(values))
+    mad = float(np.median(np.abs(values - median)))
+    robust_sigma = float(gates["robust_sigma"])
+    tolerance = max(1.2, min(float(gates["max_outlier_distance"]) + 1.0, robust_sigma * 1.4826 * mad))
+    if mad <= 1e-9:
+        tolerance = 1.2
+    keep = np.abs(values - median) <= tolerance
+    if np.count_nonzero(keep) < MIN_EDGE_VOTES:
+        keep = np.ones(index.size, dtype=bool)
+    coeff = np.polyfit(index[keep].astype(np.float64), values[keep], 1)
+    predicted = np.polyval(coeff, index.astype(np.float64))
+    residual = values - predicted
+    center = float(np.median(residual))
+    mad2 = float(np.median(np.abs(residual - center)))
+    cutoff = min(
+        float(gates["max_outlier_distance"]),
+        max(0.6, robust_sigma * 1.4826 * max(mad2, 0.05)),
+    )
+    refined = np.abs(residual - center) <= cutoff
+    if np.count_nonzero(refined) >= MIN_EDGE_VOTES:
+        keep = refined
+        coeff = np.polyfit(index[keep].astype(np.float64), values[keep], 1)
+        residual = values - np.polyval(coeff, index.astype(np.float64))
+    chosen = index[keep]
+    mask = np.zeros(position.shape[0], dtype=bool)
+    mask[chosen] = True
+    depth = float(np.polyval(coeff, float(np.median(chosen))))
+    return {
+        "depth": depth,
+        "mask": mask,
+        "slope": float(coeff[0]),
+        "intercept": float(coeff[1]),
+        "line_rmse": float(np.sqrt(np.mean(residual[keep] ** 2))),
+        "inlier_ratio": float(np.count_nonzero(keep) / max(1, index.size)),
+        "inlier_count": int(np.count_nonzero(keep)),
+    }
+
+
+def _image_position(roi_name, roi, scanline, depth):
+    roi_x, roi_y, roi_w, roi_h = roi
+    if roi_name == "top":
+        return roi_x + scanline, roi_y + depth
+    if roi_name == "bottom":
+        return roi_x + scanline, roi_y + roi_h - 1 - depth
+    if roi_name == "left":
+        return roi_x + depth, roi_y + scanline
+    return roi_x + roi_w - 1 - depth, roi_y + scanline
+
+
+def _measure_side(gray, roi, roi_name, gates):
+    profiles, is_horizontal = _outside_first_profiles(gray, roi, roi_name)
+    if profiles.shape[1] < MIN_ROI_DEPTH:
+        return None, f"{roi_name}边ROI深度不足，至少需要 {MIN_ROI_DEPTH}px"
+    sign = _expected_inward_sign(profiles)
+    rows, peaks = _collect_peaks(profiles, sign, gates)
+    guide = _consensus_depth(rows, peaks, profiles.shape[1] - 1, profiles.shape[0], gates)
+    if guide is None:
+        return None, f"{roi_name}边无可用外轮廓"
+    position = np.full(profiles.shape[0], np.nan, dtype=np.float64)
+    if peaks.size:
+        grouped = {}
+        for row, peak in zip(rows.tolist(), peaks.tolist()):
+            grouped.setdefault(row, []).append(peak)
+        window = float(gates["guide_window"])
+        anchors = np.full(profiles.shape[0], np.nan)
+        for row, candidates in grouped.items():
+            near = [item for item in candidates if abs(item - guide) <= window]
+            if near:
+                anchors[row] = min(near, key=lambda item: abs(item - guide))
+        valid_rows = np.flatnonzero(np.isfinite(anchors))
+        if valid_rows.size:
+            crossed, outer, inner, samples = _crossings(
+                profiles[valid_rows], anchors[valid_rows], float(gates["crossing_fraction"]),
+            )
+            position[valid_rows] = crossed
+        else:
+            outer = inner = samples = None
+            valid_rows = np.empty(0, dtype=np.int64)
+    else:
+        outer = inner = samples = None
+        valid_rows = np.empty(0, dtype=np.int64)
+
+    bias = float(gates["edge_bias_y"] if is_horizontal else gates["edge_bias_x"])
+    fitted = _fit_depth_line(position, gates)
+    if fitted is None:
+        return None, f"{roi_name}边无可用外轮廓"
+    depth = fitted["depth"] + bias
+    scanline = float(np.median(np.flatnonzero(fitted["mask"])))
+    origin_x, origin_y = _image_position(roi_name, roi, scanline, depth)
+    inlier_rows = np.flatnonzero(fitted["mask"])
+    inlier_depth = position[inlier_rows] + bias
+    point_x, point_y = _image_position(
+        roi_name, roi, inlier_rows.astype(np.float64), inlier_depth,
+    )
+    points = np.column_stack([point_x, point_y])
+    if is_horizontal:
+        coeff = np.polyfit(points[:, 0], points[:, 1], 1) if len(points) >= 2 else None
+    else:
+        coeff = np.polyfit(points[:, 1], points[:, 0], 1) if len(points) >= 2 else None
+    line = {
+        "slope": 0.0 if coeff is None else float(coeff[0]),
+        "intercept": float(origin_y if is_horizontal else origin_x) if coeff is None else float(coeff[1]),
+        "inlier_mask": np.ones(len(points), dtype=bool),
+        "line_rmse": fitted["line_rmse"],
+        "inlier_ratio": fitted["inlier_ratio"],
+        "inlier_count": fitted["inlier_count"],
+        "coverage": (
+            float(points[:, 0].min()) if is_horizontal else float(points[:, 1].min()),
+            float(points[:, 0].max()) if is_horizontal else float(points[:, 1].max()),
+        ) if len(points) else (scanline, scanline),
+    }
+    if coeff is not None:
+        line["slope"] = float(coeff[0])
+        line["intercept"] = float(coeff[1])
+    contrast = 0.0
+    edge_width = 0.0
+    representative = None
+    if valid_rows.size:
+        contrast = float(np.median(np.abs(outer - inner)))
+        representative = {
+            "window": samples[len(samples) // 2],
+            "smoothed": samples[len(samples) // 2],
+            "dark": float(min(outer[len(outer) // 2], inner[len(inner) // 2])),
+            "bright": float(max(outer[len(outer) // 2], inner[len(inner) // 2])),
+        }
+    return {
         "roi": tuple(int(v) for v in roi),
         "is_horizontal": is_horizontal,
-        "exterior_high": exterior_high,
-        "attempted": attempted,
-        "valid": valid_count,
-        "points": np.asarray(points, dtype=np.float64).reshape(-1, 2),
-        "plateau": int(fine["plateau"]),
-        "binary_offset": float(offset),
-    }
-    if np.count_nonzero(usable) > 0:
-        entry["contrast_ratio"] = float(np.median(fine["contrast_ratio"][usable]))
-        entry["edge_width"] = float(np.median(fine["edge_width"][usable]))
-        middle = int(np.flatnonzero(usable)[np.count_nonzero(usable) // 2])
-    else:
-        entry["contrast_ratio"] = 0.0
-        entry["edge_width"] = 0.0
-        middle = int(len(usable) // 2)
-    entry["representative"] = {
-        "window": fine["window"][middle],
-        "smoothed": fine["smoothed"][middle],
-        "dark": float(fine["dark"][middle]),
-        "bright": float(fine["bright"][middle]),
-    }
-    if line is not None:
-        entry.update(line)
-    return entry
+        "exterior_high": bool(sign < 0),
+        "attempted": int(profiles.shape[0]),
+        "valid": int(np.count_nonzero(np.isfinite(position))),
+        "points": points,
+        "plateau": 0,
+        "binary_offset": bias,
+        "contrast_ratio": contrast,
+        "edge_width": edge_width,
+        "representative": representative,
+        "origin": (float(origin_x), float(origin_y)),
+        **line,
+    }, None
 
 
 def detect_hybrid(detector, image):
-    """在 SizeDetector 实例上执行混合尺寸检测。"""
+    """在 SizeDetector 实例上执行外轮廓尺寸检测。"""
     from src.detectors.size_detector import SizeDetector
 
     try:
@@ -353,146 +329,25 @@ def detect_hybrid(detector, image):
     if roi_error is not None:
         return detector._fail(roi_error)
 
-    min_threshold = int(detector.params.get("min_threshold", 0))
-    max_threshold = int(detector.params.get("max_threshold", 255))
-    binary = cv.inRange(gray, min_threshold, max_threshold)
-    if binary.min() == binary.max():
-        return detector._fail(
-            f"二值化图像无边界，请检查阈值 [{min_threshold}, {max_threshold}]"
-        )
-
-    gray_f = gray.astype(np.float32)
-    q_low, q_high = np.percentile(gray_f[::3, ::3], [1.0, 99.0])
-    global_dynamic = float(q_high - q_low)
-    if global_dynamic <= 1e-9:
-        return detector._fail("图像灰度动态范围不足")
-
-    gates = QUALITY_GATES
+    gates = resolve_gates(detector.params)
     direction = SizeDetector.normalize_detect_direction(
         detector.params.get("detect_direction", "outward")
     )
     debug = {}
-    lines = {}
+    origins = {}
     for roi_name in detector.ROI_SIDES:
-        roi = rois[roi_name]
-        gray_profiles, is_horizontal = oriented_profiles(
-            gray_f, roi, roi_name, SMOOTH_SIGMA
-        )
-        binary_profiles, _ = oriented_profiles(binary, roi, roi_name, 0.0)
-        windows = profile_windows(gray_profiles.shape[1])
-        if windows is None:
-            return detector._fail(
-                f"{roi_name}边ROI深度不足，至少需要 {MIN_ROI_DEPTH}px", debug
-            )
-        margin, inner_span, outer_span = windows
-        exterior_high = binary_exterior_is_high(binary_profiles)
-        coarse, has_edge = binary_silhouette(
-            binary_profiles, exterior_high, margin, direction
-        )
-        if coarse is None or has_edge is None:
-            return detector._fail(f"{roi_name}边二值边界不足，请检查阈值", debug)
-        guide = consensus_line(coarse, has_edge)
-        if guide is None:
-            return detector._fail(f"{roi_name}边二值边界不足，请检查阈值", debug)
+        measured, error = _measure_side(gray, rois[roi_name], roi_name, gates)
+        if measured is None:
+            return detector._fail(error, debug)
+        debug[roi_name] = measured
+        origins[roi_name] = measured["origin"]
 
-        anchor = gradient_anchor(gray_profiles, guide, exterior_high)
-        fine, error = refine_rise50(
-            gray_profiles, anchor, global_dynamic, inner_span, outer_span
-        )
-        if fine is None:
-            return detector._fail(f"{roi_name}边{error}", debug)
-
-        deviation = fine["position"] - anchor
-        measurable = fine["usable"] & np.isfinite(deviation)
-        if np.count_nonzero(measurable) < MIN_VALID_PROFILES:
-            return detector._fail(f"{roi_name}边无可用亚像素边缘", debug)
-        offset = float(np.median(deviation[measurable]))
-        binary_shift = abs(offset - float(np.median(anchor - guide)))
-        if binary_shift > gates["max_binary_offset"]:
-            debug[roi_name] = side_debug(
-                roi, is_horizontal, exterior_high, fine, offset,
-                int(len(deviation)), 0, None, np.empty((0, 2)),
-            )
-            return detector._fail(
-                f"{roi_name}边二值与灰度判据不一致: {binary_shift:.2f}px",
-                debug,
-            )
-        accepted = (
-            measurable
-            & np.isfinite(fine["edge_width"])
-            & (np.abs(deviation - offset) <= GUIDE_BAND)
-            & (fine["contrast_ratio"] >= gates["min_contrast_ratio"])
-            & (fine["edge_width"] <= gates["max_edge_width"])
-        )
-        attempted = int(len(accepted))
-        valid_count = int(np.count_nonzero(accepted))
-        debug[roi_name] = side_debug(
-            roi, is_horizontal, exterior_high, fine, offset,
-            attempted, valid_count, None, np.empty((0, 2)),
-        )
-        if (
-            valid_count < MIN_VALID_PROFILES
-            or valid_count / max(1, attempted) < gates["min_profile_success_ratio"]
-        ):
-            return detector._fail(
-                f"{roi_name}边有效扫描线不足: {valid_count}/{attempted}",
-                debug,
-            )
-
-        depth = gray_profiles.shape[1]
-        position = fine["position"][accepted]
-        if SizeDetector._is_reverse_for_side(roi_name, "outward"):
-            position = depth - 1 - position
-        cross = np.flatnonzero(accepted)
-        points = (
-            np.column_stack([roi[0] + cross, roi[1] + position])
-            if is_horizontal
-            else np.column_stack([roi[0] + position, roi[1] + cross])
-        )
-        line = robust_fit_edge_line(points, is_horizontal, gates)
-        debug[roi_name] = side_debug(
-            roi, is_horizontal, exterior_high, fine, offset,
-            attempted, valid_count, line, points,
-        )
-        if line is None:
-            return detector._fail(f"{roi_name}边直线拟合失败", debug)
-        if line["inlier_ratio"] < gates["min_line_inlier_ratio"]:
-            return detector._fail(
-                f"{roi_name}边内点比例不足: {line['inlier_ratio']:.3f}", debug
-            )
-        if line["line_rmse"] > gates["max_line_rmse"]:
-            return detector._fail(
-                f"{roi_name}边拟合残差过大: {line['line_rmse']:.3f}px", debug
-            )
-        if line["inlier_span_ratio"] < gates["min_line_inlier_span_ratio"]:
-            return detector._fail(
-                f"{roi_name}边内点跨度不足: {line['inlier_span_ratio']:.3f}",
-                debug,
-            )
-        lines[roi_name] = line
-
-    x_reference = float(np.median(np.concatenate(
-        [debug["top"]["points"][:, 0], debug["bottom"]["points"][:, 0]]
-    )))
-    y_reference = float(np.median(np.concatenate(
-        [debug["left"]["points"][:, 1], debug["right"]["points"][:, 1]]
-    )))
-    extrapolation = {}
-    for roi_name in detector.ROI_SIDES:
-        low, high = lines[roi_name]["coverage"]
-        reference = (
-            x_reference if debug[roi_name]["is_horizontal"] else y_reference
-        )
-        extrapolation[roi_name] = float(
-            max(0.0, low - reference, reference - high)
-        )
-
-    top_boundary = evaluate_edge_line(lines["top"], x_reference)
-    bottom_boundary = evaluate_edge_line(lines["bottom"], x_reference)
-    left_boundary = evaluate_edge_line(lines["left"], y_reference)
-    right_boundary = evaluate_edge_line(lines["right"], y_reference)
-    width_pixel = right_boundary - left_boundary
-    height_pixel = bottom_boundary - top_boundary
+    left_x, _ = origins["left"]
+    right_x, _ = origins["right"]
+    _, top_y = origins["top"]
+    _, bottom_y = origins["bottom"]
+    width_pixel = float(right_x - left_x)
+    height_pixel = float(bottom_y - top_y)
     if width_pixel <= 0 or height_pixel <= 0:
         return detector._fail("尺寸边界顺序无效", debug)
 
@@ -511,13 +366,12 @@ def detect_hybrid(detector, image):
     if float(std_height) > 0:
         is_valid = is_valid and abs(height_mm - float(std_height)) <= tolerance_y
 
-    box_points = [
-        float(left_boundary), float(top_boundary),
-        float(width_pixel), float(height_pixel),
-    ]
+    box_points = [float(left_x), float(top_y), width_pixel, height_pixel]
+    min_threshold = int(detector.params.get("min_threshold", 0))
+    max_threshold = int(detector.params.get("max_threshold", 255))
     debug["summary"] = {
-        "x_reference": x_reference,
-        "y_reference": y_reference,
+        "x_reference": float(left_x + width_pixel / 2.0),
+        "y_reference": float(top_y + height_pixel / 2.0),
         "raw_width_mm": float(width_mm),
         "raw_height_mm": float(height_mm),
         "width_mm": float(width_mm),
@@ -525,7 +379,7 @@ def detect_hybrid(detector, image):
         "box_points": box_points,
         "threshold": (min_threshold, max_threshold),
         "detect_direction": direction,
-        "extrapolation_px": extrapolation,
+        "extrapolation_px": {side: 0.0 for side in detector.ROI_SIDES},
         "gates": gates,
     }
     detector.last_debug = debug

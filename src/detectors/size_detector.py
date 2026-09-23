@@ -220,6 +220,8 @@ class SizeDetector:
             "pixel_size": 0.001,  # 像素尺寸（mm/pixel）
             "detect_direction": "outward",  # outward=从内到外; inward=从外往内
             "algorithm": "hybrid",  # hybrid=Dry 混合算法; legacy=Transfer 旧投影
+            "edge_bias_x": 0.60,  # 左右边修正，px，正值向内侧
+            "edge_bias_y": -1.40,  # 上下边修正，px，正值向内侧
         }
         self.last_debug = {}
         if params:
@@ -483,6 +485,7 @@ class SizeDetector:
                 - std_size / pixel_size / pixel_size_x
                 - detect_direction: "outward" | "inward"（非法值归一为 outward）
                 - algorithm: "hybrid"（Dry）| "legacy"（Transfer 旧投影）
+                - edge_bias_x / edge_bias_y: 混合算法外形修正（px，正值向内侧，范围 [-5, 5]）
                 - roi_width: 旧键，忽略（兼容旧配方）
             clear_result: bool 是否清除之前的检测结果，默认为True
 
@@ -504,6 +507,8 @@ class SizeDetector:
             "pixel_size_x",
             "detect_direction",
             "algorithm",
+            "edge_bias_x",
+            "edge_bias_y",
         }
 
         validation_errors = []
@@ -527,6 +532,14 @@ class SizeDetector:
                 validation_errors.append(
                     f"min_threshold ({params['min_threshold']}) 不能大于 max_threshold ({params['max_threshold']})"
                 )
+
+        for bias_key in ("edge_bias_x", "edge_bias_y"):
+            if bias_key in params and params[bias_key] is not None:
+                val = params[bias_key]
+                if not isinstance(val, (int, float)) or val < -5 or val > 5:
+                    validation_errors.append(
+                        f"{bias_key} 必须在 [-5, 5] 像素内，当前值: {val}"
+                    )
 
         if "allow_tolerance_x" in params:
             val = params["allow_tolerance_x"]

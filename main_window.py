@@ -1640,8 +1640,9 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "ball_search_roi": params.get("ball_search_roi", []),
             "pixel_size": pixel_size,
         })
-        size_detector = SizeDetector()
-        size_detector.update_params({
+        from src.detectors.size_hybrid import QUALITY_GATES
+
+        size_params = {
             "min_threshold": params.get("min_threshold_size", 0),
             "max_threshold": params.get("max_threshold_size", 255),
             "allow_tolerance_x": params.get("product_size_tolerance_x", 0.1),
@@ -1652,7 +1653,16 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "pixel_size_x": params.get("pixel_size_x"),
             "detect_direction": params.get("size_detect_direction", "outward"),
             "algorithm": "legacy" if station != "dry" else "hybrid",
-        })
+        }
+        if station == "dry":
+            size_params["edge_bias_x"] = float(
+                params.get("edge_bias_x", QUALITY_GATES["edge_bias_x"])
+            )
+            size_params["edge_bias_y"] = float(
+                params.get("edge_bias_y", QUALITY_GATES["edge_bias_y"])
+            )
+        size_detector = SizeDetector()
+        size_detector.update_params(size_params)
         mark_detector = MarkDetector()
         _allow_mark = (
             params.get("allow_mark", True)

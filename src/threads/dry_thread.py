@@ -57,6 +57,8 @@ class DryThread(QThread):
     #——————————————————————————————参数更新函数————————————————————————————————————————————————————————————————————
     def update_params(self,params:dict):
         self.params = params
+        from src.detectors.size_hybrid import QUALITY_GATES
+
         self.size_detect_params = {
             "min_threshold": self.params.get("min_threshold_size", 0),
             "max_threshold": self.params.get("max_threshold_size", 255),
@@ -67,6 +69,8 @@ class DryThread(QThread):
             "pixel_size": self.params.get("pixel_size", 0.008823),
             "pixel_size_x": self.params.get("pixel_size_x"),
             "detect_direction": self.params.get("size_detect_direction", "outward"),
+            "edge_bias_x": float(self.params.get("edge_bias_x", QUALITY_GATES["edge_bias_x"])),
+            "edge_bias_y": float(self.params.get("edge_bias_y", QUALITY_GATES["edge_bias_y"])),
             "algorithm": "hybrid",
         }
         
