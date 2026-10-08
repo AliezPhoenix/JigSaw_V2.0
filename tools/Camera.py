@@ -488,11 +488,9 @@ class LineScanCamera(_CameraCommon):
         if False == self.b_open_device:
             MvCamera.MV_CC_Initialize()
             device_list = MV_CC_DEVICE_INFO_LIST()
-            t_layer_type = (MV_GIGE_DEVICE | MV_USB_DEVICE | MV_GENTL_CAMERALINK_DEVICE
-                            | MV_GENTL_CXP_DEVICE | MV_GENTL_XOF_DEVICE)
+            t_layer_type = (MV_GENTL_XOF_DEVICE)
             ret = MvCamera.MV_CC_EnumDevices(t_layer_type, device_list)
             if ret != 0:
-         
                 return ret,"enum devices fail! ret[0x%x]" % ret
             if device_list.nDeviceNum == 0:
                 return ret,"find no device!"

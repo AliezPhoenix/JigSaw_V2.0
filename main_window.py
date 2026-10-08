@@ -85,7 +85,7 @@ class MainWindow(main_window_ui.Ui_MainWindow, QMainWindow):
             "transfer": None,
         }
         self.CAM_LIST=[
-            {"alias": "dry_cam",        "camera_type": "Line", "device_index": 5},
+            {"alias": "dry_cam",        "camera_type": "Line", "device_index": 0},
             {"alias": "transfer_cam",   "port_ip": "192.168.1.201", "device_ip": "192.168.1.8"},
             {"alias": "sucker1_cam",          "port_ip": "192.168.1.202", "device_ip": "192.168.1.9"},
             {"alias": "sucker2_cam",          "port_ip": "192.168.1.203", "device_ip": "192.168.1.10"},
