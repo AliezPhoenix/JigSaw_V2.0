@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """清理 size/log 目录中的产品检测结果日志。
 
-删除高度小于 14.975 mm 的明细行；高度为空或无法解析的行保留。
+删除高度小于 14.975 mm、宽度小于 9.97 mm，或宽度、高度大于 15.04 mm 的明细行。
+对应尺寸为空或无法解析时，不按该条件删除。
 按剩余行重算统计信息、总产品数、NG 总数和各项不良数。
 序号不改。原文件不改，结果写入 size/log_cleaned/。
 """
@@ -14,7 +15,9 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-HEIGHT_LIMIT = 14.970
+HEIGHT_MIN = 14.975
+WIDTH_MIN = 9.97
+SIZE_MAX = 15.04
 
 STAT_ORDER = (
     "宽度极值(mm)",
@@ -196,11 +199,18 @@ def collect_products(ws, header_row):
     return products
 
 
+def exceeds_size_max(value):
+    return value is not None and round(value, 4) > SIZE_MAX
+
+
 def should_drop(values):
+    width = parse_number(values[1])
     height = parse_number(values[2])
-    if height is None:
-        return False
-    return round(height, 4) < HEIGHT_LIMIT
+    if height is not None and round(height, 4) < HEIGHT_MIN:
+        return True
+    if width is not None and round(width, 4) < WIDTH_MIN:
+        return True
+    return exceeds_size_max(width) or exceeds_size_max(height)
 
 
 def build_statistics(kept_rows, tolerance_x, tolerance_y):
@@ -381,11 +391,11 @@ def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     root = Path(__file__).resolve().parent.parent
-    log_dir = root / "size" / "log"
+    log_dir = root / "log" / "M6AN13725-00"
     if not log_dir.is_dir():
         print(f"日志目录不存在: {log_dir}")
         return 1
-    clean_log_dir(log_dir, root / "size" / "log_cleaned")
+    clean_log_dir(log_dir, root / "log" / "M6AN13725-00_cleaned")
     return 0
 
 
