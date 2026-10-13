@@ -4,11 +4,12 @@
 亮塑封、暗背景，边缘与图像轴对齐。输入是一颗外包矩形 ROI；
 未给 ROI 时把整幅图当作这一颗。四边测量窗由 ROI、搜索深度和角点排除推出。
 
-塑封边是外轮廓的二值交点：沿扫描方向平滑后，取外侧背景到外缘亮峰的
-一定比例作为阈值，再求每条扫描线从外向内第一次升过该阈值的亚像素位置。
-左右亮边用较高比例，靠近饱和起点；上边薄脊用接近峰值的比例；下边弱脊用
-较低比例，落在外肩。引脚缺口与这条边错开的样本当作离群点去掉。
-edge_bias_* 为正时把边向塑封内侧移动，用来对齐人工标注的外轮廓。
+塑封边是外轮廓的二值交点：沿扫描方向平滑后，外缘带里梯度最大的位置是上升沿。
+背景只取这个峰前面几个像素，避开更外侧的邻颗亮区。再用背景到峰顶的一定比例
+作为阈值，求每条扫描线从外向内第一次升过该阈值的亚像素位置。左右亮边用
+较高比例，靠近饱和起点；上边薄脊用接近峰值的比例；下边弱脊用较低比例，
+落在外肩。引脚缺口与这条边错开的样本当作离群点去掉。edge_bias_* 为正时
+把边向塑封内侧移动。
 """
 
 from __future__ import annotations
@@ -386,6 +387,11 @@ def _measure_side(gray, side, window, params):
         "outlier_points": _sample_points(side, window, depths, outlier_mask),
     }
     if consensus is None:
+        if finite.size >= min_inliers and not params.get("_outlier_widened"):
+            wide = dict(params)
+            wide["outlier_px"] = 4.0
+            wide["_outlier_widened"] = True
+            return _measure_side(gray, side, window, wide)
         info["message"] = (
             f"{side}边有效样本不足 ({finite.size})"
             if finite.size < min_inliers
@@ -408,7 +414,8 @@ def _edge_depths(profiles, params, side):
     """profiles[:, 0] 在外侧。返回每条扫描线升过二值阈值的亚像素深度。
 
     阈值由中值轮廓决定：外缘带里梯度最大的位置是上升沿，
-    背景取这条沿外侧，亮峰取沿内侧几个像素，再按比例得到二值电平。
+    背景取这个峰前面几个像素，亮峰取沿内侧几个像素，再按比例得到二值电平。
+    上下边如果锁到了外缘带末端的亮核坡脚，或逐行都找不到交点，再改用外侧那条脊。
     """
     sigma = float(params.get("smooth_sigma", 0.8))
     if sigma > 0:
@@ -424,16 +431,71 @@ def _edge_depths(profiles, params, side):
     if outer_end <= 4:
         return np.full(count, np.nan)
     peak_at = 3 + int(np.argmax(gradient[3:outer_end]))
-    # 同一产品换一颗裁切时，下边亮脊可能只高出背景几个灰度。
+    depths = _depths_from_peak(profiles, profile, peak_at, params, side)
+    if side in ("left", "right"):
+        return depths
+    finite = depths[np.isfinite(depths)]
+    ridge = _outer_ridge(profile, gradient, outer_end)
+    missing = finite.size < 16
+    deep = finite.size >= 16 and float(np.median(finite)) >= 18.0
+    if ridge is not None and (missing or (deep and ridge <= float(np.median(finite)) - 6)):
+        replacement = _depths_from_peak(profiles, profile, ridge, params, side)
+        if int(np.isfinite(replacement).sum()) >= 16:
+            return replacement
+    if missing:
+        filled = _profile_depth(profiles, profile, gradient, peak_at, params, side)
+        if filled is not None:
+            return filled
+    return depths
+
+
+def _depths_from_peak(profiles, profile, peak_at, params, side):
+    gradient = np.gradient(profile)
+    if peak_at < 1 or peak_at >= len(profile) - 1:
+        return np.full(profiles.shape[0], np.nan)
     if float(gradient[peak_at]) < 0.6:
-        return np.full(count, np.nan)
-    base = float(np.median(profile[: max(6, peak_at - 3)]))
+        return np.full(profiles.shape[0], np.nan)
+    # 背景只取峰前几个像素。整段前缀的中值会被邻颗亮区抬高，把真边判成没有对比度。
+    base = float(np.median(profile[max(0, peak_at - 5):peak_at]))
     height = float(np.max(profile[peak_at : min(len(profile), peak_at + 5)]))
     if height - base < 2.0:
-        return np.full(count, np.nan)
+        return np.full(profiles.shape[0], np.nan)
     level = base + _binary_ratio(params, side) * (height - base)
-    stop = min(depth - 1, peak_at + 5)
-    return np.array([_rising_cross(profiles[index], level, stop) for index in range(count)])
+    stop = min(profiles.shape[1] - 1, peak_at + 5)
+    return np.array([_rising_cross(profiles[index], level, stop) for index in range(profiles.shape[0])])
+
+
+def _outer_ridge(profile, gradient, outer_end):
+    """外缘带里最外侧一条亮脊：先升高，随后又落回暗背景。"""
+    for index in range(4, outer_end - 1):
+        slope = float(gradient[index])
+        if slope < 2.0:
+            continue
+        if slope < float(gradient[index - 1]) or slope < float(gradient[index + 1]):
+            continue
+        base = float(np.median(profile[max(0, index - 5):index]))
+        height = float(np.max(profile[index:index + 4]))
+        if height - base < 4.0:
+            continue
+        after = gradient[index + 1:index + 7]
+        if after.size and float(np.min(after)) < -1.0:
+            return index
+    return None
+
+
+def _profile_depth(profiles, profile, gradient, peak_at, params, side):
+    """逐行交点太少时，用中值轮廓过弱脊的位置作为整条边。"""
+    if float(gradient[peak_at]) < 1.0:
+        return None
+    base = float(np.min(profile[max(0, peak_at - 5):peak_at])) if peak_at else float(profile[0])
+    height = float(np.max(profile[peak_at:min(len(profile), peak_at + 5)]))
+    if height - base < 2.0:
+        return None
+    level = base + _binary_ratio(params, side) * (height - base)
+    crossed = _rising_cross(profile, level, min(len(profile) - 1, peak_at + 5))
+    if not np.isfinite(crossed):
+        return None
+    return np.full(profiles.shape[0], float(crossed))
 
 
 def _binary_ratio(params, side):
